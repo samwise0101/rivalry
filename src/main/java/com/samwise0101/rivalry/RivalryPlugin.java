@@ -17,7 +17,10 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.Player;
 import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GameTick;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.hiscore.HiscoreClient;
@@ -62,9 +65,15 @@ public class RivalryPlugin extends Plugin
 	@Inject
 	private ScheduledExecutorService executor;
 
+	@Inject
+	private ClientThread clientThread;
+
 	private RivalryPanel panel;
 	private NavigationButton navButton;
 	private ScheduledFuture<?> pollTask;
+
+	// Cached on the client thread (GameTick) so executor threads can read it safely.
+	private volatile String localPlayerName;
 
 	// username -> last known snapshot
 	private final Map<String, PlayerSnapshot> snapshots = new HashMap<>();
@@ -110,10 +119,27 @@ public class RivalryPlugin extends Plugin
 	@Subscribe
 	public void onGameStateChanged(GameStateChanged event)
 	{
-		if (event.getGameState() == GameState.LOGGED_IN)
+		GameState state = event.getGameState();
+		if (state == GameState.LOGGED_IN)
 		{
 			// Trigger a refresh shortly after login so data is fresh
 			executor.schedule(this::refresh, 10, TimeUnit.SECONDS);
+		}
+		else if (state == GameState.LOGIN_SCREEN || state == GameState.HOPPING)
+		{
+			localPlayerName = null;
+		}
+	}
+
+	@Subscribe
+	public void onGameTick(GameTick tick)
+	{
+		// Runs on the client thread — safe to read the local player here.
+		Player local = client.getLocalPlayer();
+		String name = local != null ? local.getName() : null;
+		if (name != null && !name.equals(localPlayerName))
+		{
+			localPlayerName = name;
 		}
 	}
 
@@ -148,7 +174,7 @@ public class RivalryPlugin extends Plugin
 
 	private void refresh()
 	{
-		String localName = getLocalPlayerName();
+		String localName = localPlayerName;
 		List<String> allPlayers = buildPlayerList(localName);
 
 		if (allPlayers.isEmpty())
@@ -194,6 +220,21 @@ public class RivalryPlugin extends Plugin
 	}
 
 	private void computeAndUpdate(String localName, List<String> allPlayers)
+	{
+		try
+		{
+			doComputeAndUpdate(localName, allPlayers);
+		}
+		catch (Exception e)
+		{
+			// The executor swallows exceptions silently; log and clear the status
+			// so the panel never gets stuck on "Refreshing...".
+			log.warn("Failed to compute crown standings", e);
+			panel.setStatus("Refresh failed — see logs");
+		}
+	}
+
+	private void doComputeAndUpdate(String localName, List<String> allPlayers)
 	{
 		// Keyed by display-case username so RivalryPanel lookups match.
 		Map<String, Integer> crownCounts = new HashMap<>();
@@ -291,15 +332,6 @@ public class RivalryPlugin extends Plugin
 		}
 	}
 
-	private String getLocalPlayerName()
-	{
-		if (client.getGameState() == GameState.LOGGED_IN && client.getLocalPlayer() != null)
-		{
-			return client.getLocalPlayer().getName();
-		}
-		return null;
-	}
-
 	private List<String> buildPlayerList(String localName)
 	{
 		List<String> players = new ArrayList<>();
@@ -325,9 +357,16 @@ public class RivalryPlugin extends Plugin
 
 	private void notify(String message)
 	{
-		if (config.notifyGameChat() && client.getGameState() == GameState.LOGGED_IN)
+		if (config.notifyGameChat())
 		{
-			client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null);
+			// Client calls must run on the client thread.
+			clientThread.invoke(() ->
+			{
+				if (client.getGameState() == GameState.LOGGED_IN)
+				{
+					client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null);
+				}
+			});
 		}
 		if (config.notifyDesktop())
 		{
