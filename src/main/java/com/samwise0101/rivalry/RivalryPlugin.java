@@ -23,6 +23,7 @@ import net.runelite.api.Player;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.SpriteManager;
 import net.runelite.client.config.ConfigManager;
@@ -80,12 +81,18 @@ public class RivalryPlugin extends Plugin
 	@Inject
 	private ItemManager itemManager;
 
+	@Inject
+	private WomClient womClient;
+
 	private RivalryPanel panel;
 	private NavigationButton navButton;
 	private ScheduledFuture<?> pollTask;
 
 	// Cached on the client thread (GameTick) so executor threads can read it safely.
 	private volatile String localPlayerName;
+
+	// Last successfully fetched WOM roster, for fallback when a fetch fails.
+	private volatile List<String> lastWomMembers;
 
 	// username -> last known snapshot
 	private final Map<String, PlayerSnapshot> snapshots = new HashMap<>();
@@ -155,6 +162,23 @@ public class RivalryPlugin extends Plugin
 		}
 	}
 
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (!"rivalry".equals(event.getGroup()))
+		{
+			return;
+		}
+
+		if ("pollIntervalMinutes".equals(event.getKey()))
+		{
+			schedulePoll();
+		}
+
+		// Re-run the leaderboard when the roster or group settings change.
+		triggerRefresh();
+	}
+
 	@Provides
 	RivalryConfig provideConfig(ConfigManager configManager)
 	{
@@ -187,11 +211,54 @@ public class RivalryPlugin extends Plugin
 	private void refresh()
 	{
 		String localName = localPlayerName;
-		List<String> allPlayers = buildPlayerList(localName);
 
+		if (config.useWomGroup())
+		{
+			resolveWomRoster(localName);
+		}
+		else
+		{
+			proceedRefresh(localName, buildPlayerList(localName));
+		}
+	}
+
+	/** Fetches the WOM group roster (async), then continues the normal refresh. */
+	private void resolveWomRoster(String localName)
+	{
+		int groupId = config.womGroupId();
+		if (groupId <= 0)
+		{
+			panel.setStatus("Set a WOM group ID in settings.");
+			return;
+		}
+
+		panel.setStatus("Fetching WOM group...");
+		womClient.fetchGroupMembers(groupId, config.womMaxMembers(),
+			members ->
+			{
+				lastWomMembers = members;
+				executor.execute(() -> proceedRefresh(localName, withLocalPlayer(localName, members)));
+			},
+			error ->
+			{
+				log.debug("WOM group fetch failed: {}", error.getMessage());
+				if (lastWomMembers != null)
+				{
+					// Fall back to the last known roster so a blip doesn't wipe standings.
+					executor.execute(() -> proceedRefresh(localName, withLocalPlayer(localName, lastWomMembers)));
+				}
+				else
+				{
+					panel.setStatus("WOM group fetch failed — check the group ID.");
+				}
+			});
+	}
+
+	private void proceedRefresh(String localName, List<String> allPlayers)
+	{
 		if (allPlayers.isEmpty())
 		{
-			panel.setStatus("Configure rivals in settings.");
+			panel.setStatus(config.useWomGroup() ? "WOM group has no members." : "Configure rivals in settings.");
 			return;
 		}
 
@@ -208,6 +275,24 @@ public class RivalryPlugin extends Plugin
 		// After all fetches should be done, compute crowns and update UI
 		long totalDelayMs = allPlayers.size() * 500L + 3000L;
 		executor.schedule(() -> computeAndUpdate(localName, allPlayers), totalDelayMs, TimeUnit.MILLISECONDS);
+	}
+
+	/** Prepends the local player (if logged in and not already present) to a roster. */
+	private static List<String> withLocalPlayer(String localName, List<String> members)
+	{
+		List<String> players = new ArrayList<>();
+		if (localName != null && !localName.isEmpty())
+		{
+			players.add(localName);
+		}
+		for (String m : members)
+		{
+			if (players.stream().noneMatch(p -> p.equalsIgnoreCase(m)))
+			{
+				players.add(m);
+			}
+		}
+		return players;
 	}
 
 	private void fetchPlayer(String username)
@@ -304,9 +389,11 @@ public class RivalryPlugin extends Plugin
 			return;
 		}
 
-		// Pass 1: find the crown holder (highest crown value) and gather display values.
-		String newHolder = null;
+		// Pass 1: find the leading crown value, count ties for the lead, gather displays.
 		long best = -1;
+		int topCount = 0;
+		String topPlayer = null; // a player achieving the best value
+		int topDisplay = -1;     // display value at the top
 		Map<String, Integer> displays = new HashMap<>();
 		for (String name : allPlayers)
 		{
@@ -314,27 +401,39 @@ public class RivalryPlugin extends Plugin
 			long crownVal = snap != null ? crownValueFn.applyAsLong(snap) : -1;
 			int displayVal = snap != null ? displayValueFn.applyAsInt(snap) : -1;
 			displays.put(name, displayVal);
+
+			if (crownVal < 0)
+			{
+				continue; // unranked — cannot lead
+			}
 			if (crownVal > best)
 			{
 				best = crownVal;
-				newHolder = name;
+				topCount = 1;
+				topPlayer = name;
+				topDisplay = displayVal;
+			}
+			else if (crownVal == best)
+			{
+				topCount++;
 			}
 		}
 
-		if (newHolder == null)
+		if (best < 0)
 		{
-			return;
+			return; // nobody ranked in this category
 		}
 
+		// A crown is only held when a single player strictly leads. A tie for the
+		// lead means the crown is contested and counts for no one.
+		String newHolder = topCount == 1 ? topPlayer : null;
 		String prevHolder = crownHolders.get(id);
 
 		if (!seeded)
 		{
-			// First run: just record, don't notify
-			crownHolders.put(id, newHolder);
-			persistCrown(id, newHolder);
+			persistAndStore(id, newHolder);
 		}
-		else if (!newHolder.equalsIgnoreCase(prevHolder))
+		else if (!sameHolder(newHolder, prevHolder))
 		{
 			boolean localHeld = localName != null && localName.equalsIgnoreCase(prevHolder);
 			boolean localGained = localName != null && localName.equalsIgnoreCase(newHolder);
@@ -345,23 +444,24 @@ public class RivalryPlugin extends Plugin
 			}
 			else if (localHeld)
 			{
-				notify("You lost the " + displayName + " crown to " + newHolder + "!");
+				notify(newHolder != null
+					? "You lost the " + displayName + " crown to " + newHolder + "!"
+					: "You lost the " + displayName + " crown!");
 			}
 
-			crownHolders.put(id, newHolder);
-			persistCrown(id, newHolder);
+			persistAndStore(id, newHolder);
 		}
 
-		crownCount.merge(newHolder, 1, Integer::sum);
+		if (newHolder != null)
+		{
+			crownCount.merge(newHolder, 1, Integer::sum);
+		}
 
-		// Values are relative to the crown holder:
-		//   holder    -> +(holder's value minus the best challenger)  [their margin]
-		//   non-holder-> (their value minus holder's value)           [their deficit, <= 0]
-		int holderDisplay = displays.get(newHolder);
+		// Best display value among players other than the holder, for the holder's margin.
 		int runnerUp = 0;
 		for (String name : allPlayers)
 		{
-			if (name.equals(newHolder))
+			if (newHolder != null && name.equals(newHolder))
 			{
 				continue;
 			}
@@ -372,6 +472,9 @@ public class RivalryPlugin extends Plugin
 			}
 		}
 
+		// Values are relative to the top of the category:
+		//   holder     -> +(margin over the field)
+		//   non-holder -> (their value minus the top)  [<= 0]
 		for (String p : allPlayers)
 		{
 			int displayVal = displays.get(p);
@@ -382,7 +485,7 @@ public class RivalryPlugin extends Plugin
 				continue;
 			}
 
-			boolean holds = p.equalsIgnoreCase(newHolder);
+			boolean holds = newHolder != null && p.equalsIgnoreCase(newHolder);
 			Integer diff;
 			if (displayVal < 0)
 			{
@@ -390,15 +493,27 @@ public class RivalryPlugin extends Plugin
 			}
 			else if (holds)
 			{
-				diff = holderDisplay - runnerUp;
+				diff = topDisplay - runnerUp;
 			}
 			else
 			{
-				diff = displayVal - holderDisplay;
+				diff = displayVal - topDisplay;
 			}
 
-			statsByPlayer.get(p).add(new CategoryStat(displayName, spriteId, itemId, type, diff, holds, aggregate));
+			statsByPlayer.get(p).add(new CategoryStat(displayName, spriteId, itemId, type, diff, holds, newHolder != null, aggregate));
 		}
+	}
+
+	private void persistAndStore(String id, String holder)
+	{
+		String value = holder != null ? holder : "";
+		crownHolders.put(id, value);
+		persistCrown(id, value);
+	}
+
+	private static boolean sameHolder(String a, String b)
+	{
+		return (a == null ? "" : a).equalsIgnoreCase(b == null ? "" : b);
 	}
 
 	// -------------------------------------------------------------------------

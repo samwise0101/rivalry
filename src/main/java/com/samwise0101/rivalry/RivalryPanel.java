@@ -10,12 +10,16 @@ import java.awt.Image;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import javax.swing.BorderFactory;
+import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
@@ -43,17 +47,27 @@ public class RivalryPanel extends PluginPanel
 	private static final Color BEHIND_COLOR = ColorScheme.PROGRESS_ERROR_COLOR;     // red
 	private static final int ICON_SIZE = 18;
 	private static final int GRID_COLUMNS = 3;
+	private static final int REACH_LIMIT = 10;
 
 	private final SpriteManager spriteManager;
 	private final ItemManager itemManager;
 	private final ImageIcon trophyIcon;
-	private final JPanel standingsPanel = new JPanel();
+	private final JPanel body = new JPanel();
 	private final JLabel statusLabel = new JLabel("Not refreshed yet", SwingConstants.CENTER);
 	private Runnable onRefresh;
 
-	// Usernames whose section is expanded, and which tab they last had open.
+	// Per-player expand state and last-open tab.
 	private final Set<String> expanded = new HashSet<>();
-	private final java.util.Map<String, String> selectedTab = new HashMap<>();
+	private final Map<String, String> selectedTab = new HashMap<>();
+
+	// Top-level collapsible section state (retained across refreshes).
+	private boolean rivalsExpanded = true;
+	private boolean reachExpanded = true;
+	private String reachSelectedTab = "Skills";
+
+	// Last data received, so section toggles can re-render without a refresh.
+	private List<PlayerStanding> lastStandings = Collections.emptyList();
+	private String lastLocalPlayer = "";
 
 	RivalryPanel(SpriteManager spriteManager, ItemManager itemManager)
 	{
@@ -63,8 +77,6 @@ public class RivalryPanel extends PluginPanel
 		BufferedImage trophy = ImageUtil.loadImageResource(getClass(), "/trophy.png");
 		this.trophyIcon = new ImageIcon(trophy.getScaledInstance(ICON_SIZE, ICON_SIZE, Image.SCALE_SMOOTH));
 
-		// Keep PluginPanel's default DynamicGridLayout so the surrounding sidebar
-		// JScrollPane handles overflow — content grows into the full sidebar height.
 		JLabel title = new JLabel("Rivalry", SwingConstants.CENTER);
 		title.setFont(FontManager.getRunescapeBoldFont().deriveFont(Font.BOLD, 16f));
 		title.setForeground(HEADER_COLOR);
@@ -78,9 +90,9 @@ public class RivalryPanel extends PluginPanel
 		statusLabel.setFont(FontManager.getRunescapeSmallFont());
 		add(statusLabel);
 
-		standingsPanel.setLayout(new BoxLayout(standingsPanel, BoxLayout.Y_AXIS));
-		standingsPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		add(standingsPanel);
+		body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+		body.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		add(body);
 	}
 
 	void setRefreshCallback(Runnable callback)
@@ -88,49 +100,145 @@ public class RivalryPanel extends PluginPanel
 		this.onRefresh = callback;
 	}
 
-	/**
-	 * Rebuilds the standings display. Called from the plugin (any thread).
-	 */
-	void updateStandings(List<PlayerStanding> standings, String localPlayer, String lastUpdated)
-	{
-		SwingUtilities.invokeLater(() ->
-		{
-			standingsPanel.removeAll();
-
-			if (standings.isEmpty())
-			{
-				JLabel empty = new JLabel("No rivals configured.", SwingConstants.CENTER);
-				empty.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-				standingsPanel.add(empty);
-			}
-			else
-			{
-				standings.stream()
-					.sorted((a, b) -> b.getCrownCount() - a.getCrownCount())
-					.forEach(s ->
-					{
-						boolean isLocal = s.getName().equalsIgnoreCase(localPlayer);
-						standingsPanel.add(buildPlayerRow(s, isLocal, standings, localPlayer, lastUpdated));
-						if (expanded.contains(s.getName().toLowerCase()))
-						{
-							standingsPanel.add(buildExpandSection(s));
-						}
-					});
-			}
-
-			statusLabel.setText("Updated: " + lastUpdated);
-			standingsPanel.revalidate();
-			standingsPanel.repaint();
-		});
-	}
-
 	void setStatus(String message)
 	{
 		SwingUtilities.invokeLater(() -> statusLabel.setText(message));
 	}
 
-	private JPanel buildPlayerRow(PlayerStanding standing, boolean isLocal,
-		List<PlayerStanding> standings, String localPlayer, String lastUpdated)
+	/** Stores the latest data and rebuilds the panel. Callable from any thread. */
+	void updateStandings(List<PlayerStanding> standings, String localPlayer, String lastUpdated)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			lastStandings = standings;
+			lastLocalPlayer = localPlayer;
+			statusLabel.setText("Updated: " + lastUpdated);
+			rebuild();
+		});
+	}
+
+	// -------------------------------------------------------------------------
+	// Layout
+	// -------------------------------------------------------------------------
+
+	private void rebuild()
+	{
+		body.removeAll();
+
+		// --- Your crowns summary ---
+		if (!lastStandings.isEmpty())
+		{
+			body.add(buildCrownSummary());
+		}
+
+		// --- Rivals section ---
+		body.add(sectionHeader("Rivals", rivalsExpanded, () ->
+		{
+			rivalsExpanded = !rivalsExpanded;
+			rebuild();
+		}));
+
+		if (rivalsExpanded)
+		{
+			if (lastStandings.isEmpty())
+			{
+				body.add(note("No rivals configured."));
+			}
+			else
+			{
+				lastStandings.stream()
+					.sorted((a, b) -> b.getCrownCount() - a.getCrownCount())
+					.forEach(s ->
+					{
+						boolean isLocal = s.getName().equalsIgnoreCase(lastLocalPlayer);
+						body.add(buildPlayerRow(s, isLocal));
+						if (expanded.contains(s.getName().toLowerCase()))
+						{
+							body.add(buildExpandSection(s));
+						}
+					});
+			}
+		}
+
+		// --- Within Reach section ---
+		body.add(sectionHeader("Within Reach", reachExpanded, () ->
+		{
+			reachExpanded = !reachExpanded;
+			rebuild();
+		}));
+
+		if (reachExpanded)
+		{
+			body.add(buildReachContent());
+		}
+
+		body.add(Box.createVerticalGlue());
+		body.revalidate();
+		body.repaint();
+	}
+
+	private JComponent buildCrownSummary()
+	{
+		int total = lastStandings.stream().mapToInt(PlayerStanding::getCrownCount).sum();
+		int mine = lastStandings.stream()
+			.filter(s -> s.getName().equalsIgnoreCase(lastLocalPlayer))
+			.mapToInt(PlayerStanding::getCrownCount)
+			.findFirst()
+			.orElse(0);
+
+		JLabel summary = new JLabel("Your Crowns: " + mine + "/" + total + " 👑", SwingConstants.CENTER);
+		summary.setFont(FontManager.getRunescapeBoldFont());
+		summary.setForeground(CROWN_COLOR);
+		summary.setHorizontalAlignment(SwingConstants.CENTER);
+		summary.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
+		summary.setBorder(BorderFactory.createEmptyBorder(2, 4, 8, 4));
+		summary.setAlignmentX(LEFT_ALIGNMENT);
+		return summary;
+	}
+
+	private JComponent sectionHeader(String title, boolean isExpanded, Runnable onToggle)
+	{
+		JPanel header = new JPanel(new BorderLayout());
+		header.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		header.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 0, 1, 0, ColorScheme.MEDIUM_GRAY_COLOR),
+			BorderFactory.createEmptyBorder(5, 4, 5, 4)
+		));
+		header.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+		header.setAlignmentX(LEFT_ALIGNMENT);
+		header.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+
+		JLabel label = new JLabel((isExpanded ? "▼ " : "▶ ") + title);
+		label.setFont(FontManager.getRunescapeBoldFont());
+		label.setForeground(HEADER_COLOR);
+		header.add(label, BorderLayout.WEST);
+
+		header.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				onToggle.run();
+			}
+		});
+		return header;
+	}
+
+	private JComponent note(String text)
+	{
+		JLabel label = new JLabel(text);
+		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		label.setFont(FontManager.getRunescapeSmallFont());
+		label.setBorder(BorderFactory.createEmptyBorder(6, 4, 6, 4));
+		label.setAlignmentX(LEFT_ALIGNMENT);
+		return label;
+	}
+
+	// -------------------------------------------------------------------------
+	// Rivals section
+	// -------------------------------------------------------------------------
+
+	private JComponent buildPlayerRow(PlayerStanding standing, boolean isLocal)
 	{
 		final String name = standing.getName();
 		boolean isExpanded = expanded.contains(name.toLowerCase());
@@ -142,15 +250,16 @@ public class RivalryPanel extends PluginPanel
 			BorderFactory.createEmptyBorder(4, 6, 4, 6)
 		));
 		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+		row.setAlignmentX(LEFT_ALIGNMENT);
 		row.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
-		String arrow = isExpanded ? "▼ " : "▶ "; // ▼ / ▶
+		String arrow = isExpanded ? "▼ " : "▶ ";
 		JLabel nameLabel = new JLabel(arrow + (isLocal ? name + " (you)" : name));
 		nameLabel.setForeground(isLocal ? Color.WHITE : ColorScheme.LIGHT_GRAY_COLOR);
 		nameLabel.setFont(FontManager.getRunescapeSmallFont());
 
 		int crowns = standing.getCrownCount();
-		JLabel crownLabel = new JLabel(crowns + " 👑"); // 👑
+		JLabel crownLabel = new JLabel(crowns + " 👑");
 		crownLabel.setForeground(crowns > 0 ? CROWN_COLOR : ColorScheme.MEDIUM_GRAY_COLOR);
 		crownLabel.setFont(FontManager.getRunescapeSmallFont());
 		crownLabel.setHorizontalAlignment(SwingConstants.RIGHT);
@@ -168,7 +277,7 @@ public class RivalryPanel extends PluginPanel
 				{
 					expanded.add(key);
 				}
-				updateStandings(standings, localPlayer, lastUpdated);
+				rebuild();
 			}
 		});
 
@@ -182,6 +291,7 @@ public class RivalryPanel extends PluginPanel
 		JPanel wrapper = new JPanel(new BorderLayout());
 		wrapper.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		wrapper.setBorder(BorderFactory.createEmptyBorder(2, 4, 6, 4));
+		wrapper.setAlignmentX(LEFT_ALIGNMENT);
 
 		JPanel display = new JPanel(new BorderLayout());
 		display.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -200,20 +310,7 @@ public class RivalryPanel extends PluginPanel
 		tabGroup.addTab(skillsTab);
 		tabGroup.addTab(bossesTab);
 		tabGroup.addTab(otherTab);
-
-		// Use the GROUP's select() — it populates the display panel. tab.select()
-		// alone only restyles the tab label and shows no content.
-		switch (selectedTab.getOrDefault(key, "Skills"))
-		{
-			case "Bosses":
-				tabGroup.select(bossesTab);
-				break;
-			case "Other":
-				tabGroup.select(otherTab);
-				break;
-			default:
-				tabGroup.select(skillsTab);
-		}
+		selectTab(tabGroup, selectedTab.getOrDefault(key, "Skills"), skillsTab, bossesTab, otherTab);
 
 		wrapper.add(tabGroup, BorderLayout.NORTH);
 		wrapper.add(display, BorderLayout.CENTER);
@@ -230,14 +327,7 @@ public class RivalryPanel extends PluginPanel
 
 		if (stats.isEmpty())
 		{
-			JPanel empty = new JPanel(new BorderLayout());
-			empty.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-			empty.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
-			JLabel none = new JLabel("Nothing ranked", SwingConstants.CENTER);
-			none.setForeground(ColorScheme.MEDIUM_GRAY_COLOR);
-			none.setFont(FontManager.getRunescapeSmallFont());
-			empty.add(none, BorderLayout.CENTER);
-			return empty;
+			return emptyTabPanel("Nothing ranked");
 		}
 
 		JPanel grid = new JPanel(new GridLayout(0, GRID_COLUMNS, 4, 2));
@@ -250,6 +340,138 @@ public class RivalryPanel extends PluginPanel
 		return grid;
 	}
 
+	// -------------------------------------------------------------------------
+	// Within Reach section
+	// -------------------------------------------------------------------------
+
+	private JComponent buildReachContent()
+	{
+		PlayerStanding me = lastStandings.stream()
+			.filter(s -> s.getName().equalsIgnoreCase(lastLocalPlayer))
+			.findFirst()
+			.orElse(null);
+
+		if (me == null)
+		{
+			return note("Log in to see crowns within your reach.");
+		}
+
+		JPanel wrapper = new JPanel(new BorderLayout());
+		wrapper.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		wrapper.setBorder(BorderFactory.createEmptyBorder(2, 4, 6, 4));
+		wrapper.setAlignmentX(LEFT_ALIGNMENT);
+
+		JPanel display = new JPanel(new BorderLayout());
+		display.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+		MaterialTabGroup tabGroup = new MaterialTabGroup(display);
+		tabGroup.setBorder(BorderFactory.createEmptyBorder(2, 0, 4, 0));
+
+		MaterialTab skillsTab = new MaterialTab("Skills", tabGroup, buildReachList(me, HiscoreSkillType.SKILL));
+		MaterialTab bossesTab = new MaterialTab("Bosses", tabGroup, buildReachList(me, HiscoreSkillType.BOSS));
+		MaterialTab otherTab = new MaterialTab("Other", tabGroup, buildReachList(me, HiscoreSkillType.ACTIVITY));
+
+		skillsTab.setOnSelectEvent(() -> { reachSelectedTab = "Skills"; return true; });
+		bossesTab.setOnSelectEvent(() -> { reachSelectedTab = "Bosses"; return true; });
+		otherTab.setOnSelectEvent(() -> { reachSelectedTab = "Other"; return true; });
+
+		tabGroup.addTab(skillsTab);
+		tabGroup.addTab(bossesTab);
+		tabGroup.addTab(otherTab);
+		selectTab(tabGroup, reachSelectedTab, skillsTab, bossesTab, otherTab);
+
+		wrapper.add(tabGroup, BorderLayout.NORTH);
+		wrapper.add(display, BorderLayout.CENTER);
+		return wrapper;
+	}
+
+	/** The closest (smallest-gap) crowns of a given type that the local player doesn't hold. */
+	private JPanel buildReachList(PlayerStanding me, HiscoreSkillType type)
+	{
+		List<CategoryStat> reachable = me.getStats().stream()
+			.filter(s -> s.getType() == type && !s.isHoldsCrown() && s.getDiff() != null && s.getDiff() < 0)
+			.sorted(Comparator.comparingInt(s -> -s.getDiff())) // smallest deficit first
+			.limit(REACH_LIMIT)
+			.collect(Collectors.toList());
+
+		if (reachable.isEmpty())
+		{
+			return emptyTabPanel("Nothing within reach");
+		}
+
+		JPanel list = new JPanel();
+		list.setLayout(new BoxLayout(list, BoxLayout.Y_AXIS));
+		list.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		list.setBorder(BorderFactory.createEmptyBorder(4, 2, 4, 2));
+		for (CategoryStat stat : reachable)
+		{
+			list.add(buildReachRow(stat));
+		}
+		return list;
+	}
+
+	private JComponent buildReachRow(CategoryStat stat)
+	{
+		JPanel row = new JPanel(new BorderLayout(4, 0));
+		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		row.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 0, 1, 0, ColorScheme.DARK_GRAY_COLOR),
+			BorderFactory.createEmptyBorder(3, 4, 3, 4)
+		));
+		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+		row.setAlignmentX(LEFT_ALIGNMENT);
+
+		JLabel icon = new JLabel();
+		applyIcon(icon, stat);
+
+		JLabel name = new JLabel(stat.getName());
+		name.setFont(FontManager.getRunescapeSmallFont());
+		name.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+
+		int gap = -stat.getDiff();
+		JLabel gapLabel = new JLabel(gap + " to go");
+		gapLabel.setFont(FontManager.getRunescapeSmallFont());
+		gapLabel.setForeground(BEHIND_COLOR);
+		gapLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+
+		row.add(icon, BorderLayout.WEST);
+		row.add(name, BorderLayout.CENTER);
+		row.add(gapLabel, BorderLayout.EAST);
+		return row;
+	}
+
+	// -------------------------------------------------------------------------
+	// Shared helpers
+	// -------------------------------------------------------------------------
+
+	private static void selectTab(MaterialTabGroup group, String which, MaterialTab skills, MaterialTab bosses, MaterialTab other)
+	{
+		// Use the GROUP's select() — it populates the display panel.
+		switch (which)
+		{
+			case "Bosses":
+				group.select(bosses);
+				break;
+			case "Other":
+				group.select(other);
+				break;
+			default:
+				group.select(skills);
+		}
+	}
+
+	private JPanel emptyTabPanel(String text)
+	{
+		JPanel empty = new JPanel(new BorderLayout());
+		empty.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		empty.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
+		JLabel none = new JLabel(text, SwingConstants.CENTER);
+		none.setForeground(ColorScheme.MEDIUM_GRAY_COLOR);
+		none.setFont(FontManager.getRunescapeSmallFont());
+		empty.add(none, BorderLayout.CENTER);
+		return empty;
+	}
+
 	private JLabel buildCell(CategoryStat stat)
 	{
 		JLabel cell = new JLabel(formatValue(stat));
@@ -257,21 +479,24 @@ public class RivalryPanel extends PluginPanel
 		cell.setForeground(colorFor(stat));
 		cell.setIconTextGap(2);
 		cell.setToolTipText(stat.getName() + (stat.isHoldsCrown() ? "  (crown)" : ""));
+		applyIcon(cell, stat);
+		return cell;
+	}
 
+	private void applyIcon(JLabel label, CategoryStat stat)
+	{
 		if (stat.isAggregate())
 		{
-			cell.setIcon(trophyIcon);
+			label.setIcon(trophyIcon);
 		}
 		else if (stat.getItemId() > 0)
 		{
-			loadItemIcon(cell, stat.getItemId());
+			loadItemIcon(label, stat.getItemId());
 		}
 		else if (stat.getSpriteId() > 0)
 		{
-			loadSpriteIcon(cell, stat.getSpriteId());
+			loadSpriteIcon(label, stat.getSpriteId());
 		}
-
-		return cell;
 	}
 
 	private void loadSpriteIcon(JLabel cell, int spriteId)
@@ -294,13 +519,12 @@ public class RivalryPanel extends PluginPanel
 	private void loadItemIcon(JLabel cell, int itemId)
 	{
 		AsyncBufferedImage img = itemManager.getImage(itemId);
-		Runnable apply = () -> SwingUtilities.invokeLater(() ->
+		img.onLoaded(() -> SwingUtilities.invokeLater(() ->
 		{
 			cell.setIcon(new ImageIcon(img.getScaledInstance(ICON_SIZE, ICON_SIZE, Image.SCALE_SMOOTH)));
 			cell.revalidate();
 			cell.repaint();
-		});
-		img.onLoaded(apply);
+		}));
 	}
 
 	private static String formatValue(CategoryStat stat)
@@ -329,6 +553,11 @@ public class RivalryPanel extends PluginPanel
 		{
 			return AHEAD_COLOR;
 		}
-		return diff < 0 ? BEHIND_COLOR : ColorScheme.LIGHT_GRAY_COLOR;
+		if (diff < 0)
+		{
+			return BEHIND_COLOR;
+		}
+		// diff == 0: behind on the tiebreak if a holder exists, otherwise a genuine tie.
+		return stat.isHasHolder() ? BEHIND_COLOR : ColorScheme.LIGHT_GRAY_COLOR;
 	}
 }

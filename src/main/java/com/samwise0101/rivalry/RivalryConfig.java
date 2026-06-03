@@ -10,9 +10,54 @@ import net.runelite.client.config.Range;
 public interface RivalryConfig extends Config
 {
 	@ConfigSection(
-		name = "Rivals",
-		description = "Usernames of your rivals (up to 5)",
+		name = "Group",
+		description = "Populate rivals automatically from a Wise Old Man group",
 		position = 0
+	)
+	String groupSection = "group";
+
+	@ConfigItem(
+		keyName = "useWomGroup",
+		name = "Use Wise Old Man group",
+		description = "Populate the rival list from a Wise Old Man group instead of entering names manually",
+		section = groupSection,
+		position = 0,
+		warning = "This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers"
+	)
+	default boolean useWomGroup()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "womGroupId",
+		name = "WOM group ID",
+		description = "The numeric ID from your Wise Old Man group's URL (wiseoldman.net/groups/<id>). Only used when the toggle above is enabled.",
+		section = groupSection,
+		position = 1
+	)
+	default int womGroupId()
+	{
+		return 0;
+	}
+
+	@ConfigItem(
+		keyName = "womMaxMembers",
+		name = "Max members",
+		description = "How many of the most recently active group members to track. Only used when the toggle above is enabled.",
+		section = groupSection,
+		position = 2
+	)
+	@Range(min = 1, max = 50)
+	default int womMaxMembers()
+	{
+		return 10;
+	}
+
+	@ConfigSection(
+		name = "Rivals",
+		description = "Usernames of your rivals (up to 5). Ignored while 'Use Wise Old Man group' is enabled.",
+		position = 5
 	)
 	String rivalsSection = "rivals";
 

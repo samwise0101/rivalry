@@ -29,6 +29,9 @@ public class CategoryStat
 	/** True if this player currently leads the category (holds the crown). */
 	boolean holdsCrown;
 
+	/** True if some player strictly leads the category (the crown is not contested). */
+	boolean hasHolder;
+
 	/** True for aggregate categories (Total Level, Total Boss KC) — shown first with a trophy icon. */
 	boolean aggregate;
 }
