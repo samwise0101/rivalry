@@ -97,8 +97,8 @@ public interface RivalryConfig extends Config
 
 	@ConfigItem(
 		keyName = "trackBosses",
-		name = "Track Boss KC",
-		description = "Award a crown for total boss kill count",
+		name = "Track Bosses",
+		description = "Award a crown for each boss (by kill count)",
 		section = categoriesSection,
 		position = 12
 	)
@@ -109,8 +109,8 @@ public interface RivalryConfig extends Config
 
 	@ConfigItem(
 		keyName = "trackClues",
-		name = "Track Clue Scrolls",
-		description = "Award crowns for clue scroll completions per tier",
+		name = "Track Activities",
+		description = "Award crowns for clue scrolls and other activities (LMS, minigames, etc.)",
 		section = categoriesSection,
 		position = 13
 	)

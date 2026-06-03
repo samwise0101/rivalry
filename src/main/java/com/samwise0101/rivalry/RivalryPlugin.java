@@ -12,6 +12,8 @@ import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.ToIntFunction;
+import java.util.function.ToLongFunction;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
@@ -21,11 +23,15 @@ import net.runelite.api.Player;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.game.ItemManager;
+import net.runelite.client.game.SpriteManager;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.hiscore.HiscoreClient;
 import net.runelite.client.hiscore.HiscoreEndpoint;
 import net.runelite.client.hiscore.HiscoreResult;
+import net.runelite.client.hiscore.HiscoreSkill;
+import net.runelite.client.hiscore.HiscoreSkillType;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
@@ -68,6 +74,12 @@ public class RivalryPlugin extends Plugin
 	@Inject
 	private ClientThread clientThread;
 
+	@Inject
+	private SpriteManager spriteManager;
+
+	@Inject
+	private ItemManager itemManager;
+
 	private RivalryPanel panel;
 	private NavigationButton navButton;
 	private ScheduledFuture<?> pollTask;
@@ -77,15 +89,15 @@ public class RivalryPlugin extends Plugin
 
 	// username -> last known snapshot
 	private final Map<String, PlayerSnapshot> snapshots = new HashMap<>();
-	// category -> username of current holder (persisted key: "rivalry.crown.<category.name>")
-	private final Map<CrownCategory, String> crownHolders = new HashMap<>();
+	// category id -> username of current holder (persisted key: "rivalry.crown_<id>")
+	private final Map<String, String> crownHolders = new HashMap<>();
 
 	private boolean seeded = false;
 
 	@Override
 	protected void startUp()
 	{
-		panel = new RivalryPanel();
+		panel = new RivalryPanel(spriteManager, itemManager);
 		panel.setRefreshCallback(this::triggerRefresh);
 
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "/rivalry_icon.png");
@@ -236,99 +248,197 @@ public class RivalryPlugin extends Plugin
 
 	private void doComputeAndUpdate(String localName, List<String> allPlayers)
 	{
-		// Keyed by display-case username so RivalryPanel lookups match.
-		Map<String, Integer> crownCounts = new HashMap<>();
+		Map<String, List<CategoryStat>> statsByPlayer = new HashMap<>();
+		Map<String, Integer> crownCount = new HashMap<>();
 		for (String p : allPlayers)
 		{
-			crownCounts.put(p, 0);
+			statsByPlayer.put(p, new ArrayList<>());
+			crownCount.put(p, 0);
 		}
 
-		for (CrownCategory category : CrownCategory.values())
+		// Aggregate crowns shown at the top of their tab.
+		processCategory("TOTAL_LEVEL", "Total Level", HiscoreSkillType.SKILL, -1, -1, true,
+			PlayerSnapshot::overallXp, PlayerSnapshot::totalLevel,
+			allPlayers, localName, statsByPlayer, crownCount);
+		processCategory("TOTAL_BOSS_KC", "Total Boss KC", HiscoreSkillType.BOSS, -1, -1, true,
+			s -> s.totalBossKc(), PlayerSnapshot::totalBossKc,
+			allPlayers, localName, statsByPlayer, crownCount);
+
+		// One crown per individual hiscore entry.
+		for (HiscoreSkill skill : HiscoreSkill.values())
 		{
-			if (!isCategoryEnabled(category))
+			HiscoreSkillType type = skill.getType();
+			if (type == HiscoreSkillType.OVERALL || !isTypeEnabled(type))
 			{
 				continue;
 			}
-
-			String newHolder = findLeader(category, allPlayers);
-			if (newHolder == null)
-			{
-				continue;
-			}
-
-			String prevHolder = crownHolders.get(category);
-
-			if (!seeded)
-			{
-				// First run: just record, don't notify
-				crownHolders.put(category, newHolder);
-				persistCrown(category, newHolder);
-			}
-			else if (!newHolder.equalsIgnoreCase(prevHolder))
-			{
-				boolean localHeld = localName != null && localName.equalsIgnoreCase(prevHolder);
-				boolean localGained = localName != null && localName.equalsIgnoreCase(newHolder);
-
-				if (localGained)
-				{
-					notify("You claimed the " + category.displayName + " crown!");
-				}
-				else if (localHeld)
-				{
-					notify("You lost the " + category.displayName + " crown to " + newHolder + "!");
-				}
-
-				crownHolders.put(category, newHolder);
-				persistCrown(category, newHolder);
-			}
-
-			// newHolder is a display-case name from allPlayers, matching the map keys.
-			crownCounts.merge(newHolder, 1, Integer::sum);
+			processCategory(skill.name(), skill.getName(), type, skill.getSpriteId(), clueItemId(skill), false,
+				s -> s.crownValue(skill), s -> s.displayValue(skill),
+				allPlayers, localName, statsByPlayer, crownCount);
 		}
 
 		seeded = true;
 
+		List<PlayerStanding> standings = new ArrayList<>();
+		for (String p : allPlayers)
+		{
+			standings.add(new PlayerStanding(p, crownCount.get(p), statsByPlayer.get(p)));
+		}
+
 		String timestamp = TIME_FMT.format(Instant.now());
-		panel.updateStandings(allPlayers, crownCounts, localName != null ? localName : "", timestamp);
+		panel.updateStandings(standings, localName != null ? localName : "", timestamp);
+	}
+
+	/**
+	 * Determines the crown holder for one category, fires gain/loss notifications,
+	 * and records a per-player comparison stat.
+	 */
+	private void processCategory(String id, String displayName, HiscoreSkillType type,
+		int spriteId, int itemId, boolean aggregate,
+		ToLongFunction<PlayerSnapshot> crownValueFn, ToIntFunction<PlayerSnapshot> displayValueFn,
+		List<String> allPlayers, String localName,
+		Map<String, List<CategoryStat>> statsByPlayer, Map<String, Integer> crownCount)
+	{
+		if (!isTypeEnabled(type))
+		{
+			return;
+		}
+
+		// Pass 1: find the crown holder (highest crown value) and gather display values.
+		String newHolder = null;
+		long best = -1;
+		Map<String, Integer> displays = new HashMap<>();
+		for (String name : allPlayers)
+		{
+			PlayerSnapshot snap = snapshots.get(name.toLowerCase());
+			long crownVal = snap != null ? crownValueFn.applyAsLong(snap) : -1;
+			int displayVal = snap != null ? displayValueFn.applyAsInt(snap) : -1;
+			displays.put(name, displayVal);
+			if (crownVal > best)
+			{
+				best = crownVal;
+				newHolder = name;
+			}
+		}
+
+		if (newHolder == null)
+		{
+			return;
+		}
+
+		String prevHolder = crownHolders.get(id);
+
+		if (!seeded)
+		{
+			// First run: just record, don't notify
+			crownHolders.put(id, newHolder);
+			persistCrown(id, newHolder);
+		}
+		else if (!newHolder.equalsIgnoreCase(prevHolder))
+		{
+			boolean localHeld = localName != null && localName.equalsIgnoreCase(prevHolder);
+			boolean localGained = localName != null && localName.equalsIgnoreCase(newHolder);
+
+			if (localGained)
+			{
+				notify("You claimed the " + displayName + " crown!");
+			}
+			else if (localHeld)
+			{
+				notify("You lost the " + displayName + " crown to " + newHolder + "!");
+			}
+
+			crownHolders.put(id, newHolder);
+			persistCrown(id, newHolder);
+		}
+
+		crownCount.merge(newHolder, 1, Integer::sum);
+
+		// Values are relative to the crown holder:
+		//   holder    -> +(holder's value minus the best challenger)  [their margin]
+		//   non-holder-> (their value minus holder's value)           [their deficit, <= 0]
+		int holderDisplay = displays.get(newHolder);
+		int runnerUp = 0;
+		for (String name : allPlayers)
+		{
+			if (name.equals(newHolder))
+			{
+				continue;
+			}
+			int d = displays.get(name);
+			if (d > runnerUp)
+			{
+				runnerUp = d;
+			}
+		}
+
+		for (String p : allPlayers)
+		{
+			int displayVal = displays.get(p);
+
+			// Skills are always listed; bosses/activities only when this player is ranked.
+			if (type != HiscoreSkillType.SKILL && displayVal < 0)
+			{
+				continue;
+			}
+
+			boolean holds = p.equalsIgnoreCase(newHolder);
+			Integer diff;
+			if (displayVal < 0)
+			{
+				diff = null; // unranked skill
+			}
+			else if (holds)
+			{
+				diff = holderDisplay - runnerUp;
+			}
+			else
+			{
+				diff = displayVal - holderDisplay;
+			}
+
+			statsByPlayer.get(p).add(new CategoryStat(displayName, spriteId, itemId, type, diff, holds, aggregate));
+		}
 	}
 
 	// -------------------------------------------------------------------------
 	// Helpers
 	// -------------------------------------------------------------------------
 
-	private String findLeader(CrownCategory category, List<String> players)
+	private boolean isTypeEnabled(HiscoreSkillType type)
 	{
-		String leader = null;
-		long best = -1;
-		for (String name : players)
-		{
-			PlayerSnapshot snap = snapshots.get(name.toLowerCase());
-			if (snap == null)
-			{
-				continue;
-			}
-			long val = snap.getValue(category);
-			if (val > best)
-			{
-				best = val;
-				leader = name;
-			}
-		}
-		return leader;
-	}
-
-	private boolean isCategoryEnabled(CrownCategory category)
-	{
-		switch (category.type)
+		switch (type)
 		{
 			case SKILL:
 				return config.trackSkills();
 			case BOSS:
 				return config.trackBosses();
-			case CLUE:
+			case ACTIVITY:
 				return config.trackClues();
 			default:
 				return false;
+		}
+	}
+
+	/** Maps clue scroll tiers (which lack a sprite) to a representative clue-scroll item id, else -1. */
+	private static int clueItemId(HiscoreSkill skill)
+	{
+		switch (skill)
+		{
+			case CLUE_SCROLL_BEGINNER:
+				return 23182; // Clue scroll (beginner)
+			case CLUE_SCROLL_EASY:
+				return 2677;  // Clue scroll (easy)
+			case CLUE_SCROLL_MEDIUM:
+				return 2801;  // Clue scroll (medium)
+			case CLUE_SCROLL_HARD:
+				return 2722;  // Clue scroll (hard)
+			case CLUE_SCROLL_ELITE:
+				return 12073; // Clue scroll (elite)
+			case CLUE_SCROLL_MASTER:
+				return 19835; // Clue scroll (master)
+			default:
+				return -1;
 		}
 	}
 
@@ -380,20 +490,27 @@ public class RivalryPlugin extends Plugin
 
 	private static final String CROWN_KEY_PREFIX = "crown_";
 
-	private void persistCrown(CrownCategory category, String holder)
+	private void persistCrown(String id, String holder)
 	{
-		configManager.setConfiguration("rivalry", CROWN_KEY_PREFIX + category.name(), holder);
+		configManager.setConfiguration("rivalry", CROWN_KEY_PREFIX + id, holder);
 	}
 
 	private void loadPersistedCrowns()
 	{
-		for (CrownCategory category : CrownCategory.values())
+		for (HiscoreSkill skill : HiscoreSkill.values())
 		{
-			String stored = configManager.getConfiguration("rivalry", CROWN_KEY_PREFIX + category.name());
-			if (stored != null && !stored.isBlank())
-			{
-				crownHolders.put(category, stored);
-			}
+			loadCrown(skill.name());
+		}
+		loadCrown("TOTAL_LEVEL");
+		loadCrown("TOTAL_BOSS_KC");
+	}
+
+	private void loadCrown(String id)
+	{
+		String stored = configManager.getConfiguration("rivalry", CROWN_KEY_PREFIX + id);
+		if (stored != null && !stored.isBlank())
+		{
+			crownHolders.put(id, stored);
 		}
 	}
 }
