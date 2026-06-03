@@ -4,6 +4,78 @@ Track yourself and your rivals across the Old School RuneScape hiscores and comp
 
 Rivalry pulls hiscore data for you and a group of rivals, awards a crown to whoever leads each category, and shows the standings in a side panel. When a rival overtakes you — or you overtake them — you get an in-game notification.
 
+---
+
+## Testing this plugin (before it's on the Plugin Hub)
+
+Rivalry isn't on the RuneLite Plugin Hub yet, so it can't be installed from the in-client browser. To try it, you build and run it from source. This launches a **development RuneLite client** with the plugin already loaded. It takes about 10 minutes the first time.
+
+> You'll need access to this repository to clone it. If you can read this on GitHub, you already have access.
+
+### 1. Install the required tools
+
+You need **Git** and a **Java 11 JDK**. You do **not** need to install Gradle — the project downloads it automatically.
+
+**Windows** (in PowerShell):
+```powershell
+winget install --id Git.Git -e
+winget install --id EclipseAdoptium.Temurin.11.JDK -e
+```
+
+**macOS** (with [Homebrew](https://brew.sh)):
+```bash
+brew install git
+brew install --cask temurin@11
+```
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo apt update
+sudo apt install -y git openjdk-11-jdk
+```
+
+If you'd rather not use a package manager, download the JDK 11 installer directly from [adoptium.net](https://adoptium.net/temurin/releases/?version=11).
+
+**After installing, close and reopen your terminal**, then verify both tools are available:
+```bash
+git --version
+java -version      # should report version "11.x"
+```
+
+### 2. Download the plugin
+
+```bash
+git clone https://github.com/samwise0101/rivalry.git
+cd rivalry
+```
+
+### 3. Run it
+
+**Windows:**
+```powershell
+.\gradlew.bat run
+```
+
+**macOS / Linux:**
+```bash
+./gradlew run
+```
+
+The first run downloads RuneLite and its dependencies, so give it a few minutes. A RuneLite client window will open with Rivalry loaded.
+
+### 4. Log in and use it
+
+1. Log into the dev client with your Jagex account. If it won't let you log in, follow RuneLite's [Using Jagex Accounts](https://github.com/runelite/runelite/wiki/Using-Jagex-Accounts) guide once (it has you tick a box in the official launcher to generate a credentials file the dev client reuses).
+2. Click the **crown icon** in the right-hand toolbar to open the Rivalry panel.
+3. Open the plugin's settings (wrench icon → **Rivalry**) and add rivals — see [Setup](#setup) below.
+4. Click **Refresh Now**.
+
+To stop, just close the client window.
+
+> **Note:** hiscores only update after a player logs out, so a freshly-logged-in account may show slightly stale numbers. That's a limitation of the OSRS hiscores, not the plugin.
+
+---
+
 ## Features
 
 - **Crowns for every hiscore category** — one crown per skill (by XP), per boss (by kill count), and per activity (clues, minigames, etc.), plus aggregate **Total Level** and **Total Boss KC** crowns.
