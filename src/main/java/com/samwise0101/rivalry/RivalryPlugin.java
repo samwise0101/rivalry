@@ -195,10 +195,11 @@ public class RivalryPlugin extends Plugin
 
 	private void computeAndUpdate(String localName, List<String> allPlayers)
 	{
+		// Keyed by display-case username so RivalryPanel lookups match.
 		Map<String, Integer> crownCounts = new HashMap<>();
 		for (String p : allPlayers)
 		{
-			crownCounts.put(p.toLowerCase(), 0);
+			crownCounts.put(p, 0);
 		}
 
 		for (CrownCategory category : CrownCategory.values())
@@ -240,7 +241,8 @@ public class RivalryPlugin extends Plugin
 				persistCrown(category, newHolder);
 			}
 
-			crownCounts.merge(newHolder.toLowerCase(), 1, Integer::sum);
+			// newHolder is a display-case name from allPlayers, matching the map keys.
+			crownCounts.merge(newHolder, 1, Integer::sum);
 		}
 
 		seeded = true;
