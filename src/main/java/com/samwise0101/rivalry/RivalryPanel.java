@@ -64,6 +64,7 @@ public class RivalryPanel extends PluginPanel
 	private boolean rivalsExpanded = true;
 	private boolean reachExpanded = true;
 	private String reachSelectedTab = "Skills";
+	private String reachSkillsMode = "By Level";
 
 	// Last data received, so section toggles can re-render without a refresh.
 	private List<PlayerStanding> lastStandings = Collections.emptyList();
@@ -317,27 +318,62 @@ public class RivalryPanel extends PluginPanel
 		return wrapper;
 	}
 
-	private JPanel buildGrid(PlayerStanding standing, HiscoreSkillType type)
+	private JComponent buildGrid(PlayerStanding standing, HiscoreSkillType type)
 	{
-		List<CategoryStat> stats = standing.getStats().stream()
+		List<CategoryStat> all = standing.getStats().stream()
 			.filter(c -> c.getType() == type)
-			// Aggregate categories (Total Level / Total Boss KC) first.
-			.sorted((a, b) -> Boolean.compare(b.isAggregate(), a.isAggregate()))
 			.collect(Collectors.toList());
 
-		if (stats.isEmpty())
+		CategoryStat aggregate = all.stream().filter(CategoryStat::isAggregate).findFirst().orElse(null);
+		List<CategoryStat> regular = all.stream()
+			.filter(c -> !c.isAggregate())
+			.sorted(Comparator.comparingInt(CategoryStat::getOrder))
+			.collect(Collectors.toList());
+
+		if (aggregate == null && regular.isEmpty())
 		{
 			return emptyTabPanel("Nothing ranked");
 		}
 
-		JPanel grid = new JPanel(new GridLayout(0, GRID_COLUMNS, 4, 2));
-		grid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		grid.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
-		for (CategoryStat stat : stats)
+		JPanel container = new JPanel();
+		container.setLayout(new BoxLayout(container, BoxLayout.Y_AXIS));
+		container.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+		if (!regular.isEmpty())
 		{
-			grid.add(buildCell(stat));
+			JPanel grid = new JPanel(new GridLayout(0, GRID_COLUMNS, 4, 2));
+			grid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			grid.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
+			// Centre the grid block so left/right margins are even.
+			grid.setAlignmentX(CENTER_ALIGNMENT);
+			for (CategoryStat stat : regular)
+			{
+				grid.add(buildCell(stat));
+			}
+			container.add(grid);
 		}
-		return grid;
+
+		// Aggregate (e.g. Total Level) gets its own centered full-width row below the grid.
+		if (aggregate != null)
+		{
+			container.add(buildTotalRow(aggregate));
+		}
+
+		return container;
+	}
+
+	private JComponent buildTotalRow(CategoryStat aggregate)
+	{
+		JLabel row = new JLabel(aggregate.getName() + ": " + formatValue(aggregate), SwingConstants.CENTER);
+		row.setFont(FontManager.getRunescapeSmallFont());
+		row.setForeground(colorFor(aggregate));
+		row.setHorizontalAlignment(SwingConstants.CENTER);
+		row.setIconTextGap(4);
+		row.setBorder(BorderFactory.createEmptyBorder(6, 6, 4, 6));
+		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+		row.setAlignmentX(CENTER_ALIGNMENT);
+		applyIcon(row, aggregate);
+		return row;
 	}
 
 	// -------------------------------------------------------------------------
@@ -385,14 +421,54 @@ public class RivalryPanel extends PluginPanel
 		return wrapper;
 	}
 
-	/** The closest (smallest-gap) crowns of a given type that the local player doesn't hold. */
-	private JPanel buildReachList(PlayerStanding me, HiscoreSkillType type)
+	/** The closest crowns of a given type the local player doesn't hold. Skills get By Level / By XP sub-tabs. */
+	private JComponent buildReachList(PlayerStanding me, HiscoreSkillType type)
 	{
-		List<CategoryStat> reachable = me.getStats().stream()
-			.filter(s -> s.getType() == type && !s.isHoldsCrown() && s.getDiff() != null && s.getDiff() < 0)
-			.sorted(Comparator.comparingInt(s -> -s.getDiff())) // smallest deficit first
-			.limit(REACH_LIMIT)
-			.collect(Collectors.toList());
+		if (type != HiscoreSkillType.SKILL)
+		{
+			return buildReachRows(me, type, false);
+		}
+
+		JPanel display = new JPanel(new BorderLayout());
+		display.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+		MaterialTabGroup group = new MaterialTabGroup(display);
+		group.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
+
+		MaterialTab byLevel = new MaterialTab("By Level", group, buildReachRows(me, type, false));
+		MaterialTab byXp = new MaterialTab("By XP", group, buildReachRows(me, type, true));
+		byLevel.setOnSelectEvent(() -> { reachSkillsMode = "By Level"; return true; });
+		byXp.setOnSelectEvent(() -> { reachSkillsMode = "By XP"; return true; });
+		group.addTab(byLevel);
+		group.addTab(byXp);
+		group.select("By XP".equals(reachSkillsMode) ? byXp : byLevel);
+
+		JPanel wrapper = new JPanel(new BorderLayout());
+		wrapper.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		wrapper.add(group, BorderLayout.NORTH);
+		wrapper.add(display, BorderLayout.CENTER);
+		return wrapper;
+	}
+
+	private JComponent buildReachRows(PlayerStanding me, HiscoreSkillType type, boolean xpMode)
+	{
+		List<CategoryStat> reachable;
+		if (xpMode)
+		{
+			reachable = me.getStats().stream()
+				.filter(s -> s.getType() == type && !s.isHoldsCrown() && s.getCrownDiff() != null && s.getCrownDiff() < 0)
+				.sorted(Comparator.comparingLong(s -> -s.getCrownDiff())) // smallest XP deficit first
+				.limit(REACH_LIMIT)
+				.collect(Collectors.toList());
+		}
+		else
+		{
+			reachable = me.getStats().stream()
+				.filter(s -> s.getType() == type && !s.isHoldsCrown() && s.getDiff() != null && s.getDiff() < 0)
+				.sorted(Comparator.comparingInt(s -> -s.getDiff())) // smallest deficit first
+				.limit(REACH_LIMIT)
+				.collect(Collectors.toList());
+		}
 
 		if (reachable.isEmpty())
 		{
@@ -405,12 +481,12 @@ public class RivalryPanel extends PluginPanel
 		list.setBorder(BorderFactory.createEmptyBorder(4, 2, 4, 2));
 		for (CategoryStat stat : reachable)
 		{
-			list.add(buildReachRow(stat));
+			list.add(buildReachRow(stat, xpMode));
 		}
 		return list;
 	}
 
-	private JComponent buildReachRow(CategoryStat stat)
+	private JComponent buildReachRow(CategoryStat stat, boolean xpMode)
 	{
 		JPanel row = new JPanel(new BorderLayout(4, 0));
 		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -428,8 +504,10 @@ public class RivalryPanel extends PluginPanel
 		name.setFont(FontManager.getRunescapeSmallFont());
 		name.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 
-		int gap = -stat.getDiff();
-		JLabel gapLabel = new JLabel(gap + " to go");
+		String text = xpMode
+			? String.format("%,d XP to go", -stat.getCrownDiff())
+			: (-stat.getDiff()) + " to go";
+		JLabel gapLabel = new JLabel(text);
 		gapLabel.setFont(FontManager.getRunescapeSmallFont());
 		gapLabel.setForeground(BEHIND_COLOR);
 		gapLabel.setHorizontalAlignment(SwingConstants.RIGHT);
@@ -478,6 +556,8 @@ public class RivalryPanel extends PluginPanel
 		cell.setFont(FontManager.getRunescapeSmallFont());
 		cell.setForeground(colorFor(stat));
 		cell.setIconTextGap(2);
+		// Centre the icon+value within each (full-width) grid cell so columns are even.
+		cell.setHorizontalAlignment(SwingConstants.CENTER);
 		cell.setToolTipText(stat.getName() + (stat.isHoldsCrown() ? "  (crown)" : ""));
 		applyIcon(cell, stat);
 		return cell;
@@ -485,17 +565,17 @@ public class RivalryPanel extends PluginPanel
 
 	private void applyIcon(JLabel label, CategoryStat stat)
 	{
-		if (stat.isAggregate())
+		if (stat.getSpriteId() > 0)
 		{
-			label.setIcon(trophyIcon);
+			loadSpriteIcon(label, stat.getSpriteId());
 		}
 		else if (stat.getItemId() > 0)
 		{
 			loadItemIcon(label, stat.getItemId());
 		}
-		else if (stat.getSpriteId() > 0)
+		else if (stat.isAggregate())
 		{
-			loadSpriteIcon(label, stat.getSpriteId());
+			label.setIcon(trophyIcon);
 		}
 	}
 

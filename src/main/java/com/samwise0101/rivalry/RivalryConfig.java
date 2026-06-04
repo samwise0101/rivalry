@@ -165,6 +165,25 @@ public interface RivalryConfig extends Config
 	}
 
 	@ConfigSection(
+		name = "Display",
+		description = "How comparisons are shown in the panel",
+		position = 15
+	)
+	String displaySection = "display";
+
+	@ConfigItem(
+		keyName = "gapToNextPlayer",
+		name = "Gap to next player",
+		description = "For categories you don't lead, show how far you are behind the player immediately above you, instead of behind the crown holder",
+		section = displaySection,
+		position = 16
+	)
+	default boolean gapToNextPlayer()
+	{
+		return false;
+	}
+
+	@ConfigSection(
 		name = "Polling",
 		description = "How often to check the hiscores",
 		position = 20

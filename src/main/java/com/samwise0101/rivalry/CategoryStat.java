@@ -20,11 +20,18 @@ public class CategoryStat
 	HiscoreSkillType type;
 
 	/**
-	 * This player's value relative to the local player (theirs - mine):
-	 * levels for skills, score/KC for bosses and activities.
-	 * Null if the comparison is unavailable (either side unranked, or no local player).
+	 * This player's value relative to the crown holder (or the contested top):
+	 * levels for skills, score/KC for bosses and activities. Holder shows their
+	 * margin (>= 0); everyone else shows their deficit (<= 0). Null if unranked.
 	 */
 	Integer diff;
+
+	/**
+	 * Same comparison as {@link #diff} but in the crown-ranking metric: XP for
+	 * skills (so it differs from the level diff), score/KC for everything else.
+	 * Null if unranked.
+	 */
+	Long crownDiff;
 
 	/** True if this player currently leads the category (holds the crown). */
 	boolean holdsCrown;
@@ -32,6 +39,9 @@ public class CategoryStat
 	/** True if some player strictly leads the category (the crown is not contested). */
 	boolean hasHolder;
 
-	/** True for aggregate categories (Total Level, Total Boss KC) — shown first with a trophy icon. */
+	/** True for aggregate categories (Total Level, Total Boss KC) — shown in their own row. */
 	boolean aggregate;
+
+	/** Display order within a tab (e.g. in-game skill order). Lower comes first. */
+	int order;
 }
