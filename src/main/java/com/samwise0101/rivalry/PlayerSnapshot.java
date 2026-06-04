@@ -9,17 +9,17 @@ import net.runelite.client.hiscore.HiscoreSkillType;
  * A point-in-time snapshot of a player's hiscore data.
  */
 @Value
-public class PlayerSnapshot
+public class PlayerSnapshot implements PlayerStats
 {
 	String username;
 	HiscoreResult result;
-	long fetchedAt;
 
 	/**
 	 * Value used to rank crowns: total XP for skills, score/KC for bosses and
 	 * activities. Returns -1 if unavailable.
 	 */
-	long crownValue(HiscoreSkill skill)
+	@Override
+	public long crownValue(HiscoreSkill skill)
 	{
 		if (result == null)
 		{
@@ -41,7 +41,8 @@ public class PlayerSnapshot
 	 * Value shown in the UI: level for skills, score/KC for bosses and activities.
 	 * Returns -1 if unranked/unavailable.
 	 */
-	int displayValue(HiscoreSkill skill)
+	@Override
+	public int displayValue(HiscoreSkill skill)
 	{
 		if (result == null)
 		{
@@ -52,7 +53,8 @@ public class PlayerSnapshot
 	}
 
 	/** Total XP (Overall experience), or -1 if unavailable. Used to rank the Total Level crown. */
-	long overallXp()
+	@Override
+	public long overallXp()
 	{
 		if (result == null)
 		{
@@ -63,7 +65,8 @@ public class PlayerSnapshot
 	}
 
 	/** Total skill level (Overall level), or -1 if unavailable. */
-	int totalLevel()
+	@Override
+	public int totalLevel()
 	{
 		if (result == null)
 		{
@@ -74,7 +77,8 @@ public class PlayerSnapshot
 	}
 
 	/** Sum of all boss kill counts, or -1 if the player is ranked in no bosses. */
-	int totalBossKc()
+	@Override
+	public int totalBossKc()
 	{
 		if (result == null)
 		{
