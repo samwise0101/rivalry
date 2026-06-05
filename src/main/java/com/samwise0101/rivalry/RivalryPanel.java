@@ -9,7 +9,6 @@ import java.awt.GridLayout;
 import java.awt.Image;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.awt.image.BufferedImage;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -21,23 +20,18 @@ import java.util.stream.Collectors;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
-import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
-import net.runelite.client.game.ItemManager;
-import net.runelite.client.game.SpriteManager;
 import net.runelite.client.hiscore.HiscoreSkillType;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.ui.components.materialtabs.MaterialTab;
 import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
-import net.runelite.client.util.AsyncBufferedImage;
-import net.runelite.client.util.ImageUtil;
 
 public class RivalryPanel extends PluginPanel
 {
@@ -45,13 +39,10 @@ public class RivalryPanel extends PluginPanel
 	private static final Color HEADER_COLOR = ColorScheme.BRAND_ORANGE;
 	private static final Color AHEAD_COLOR = ColorScheme.PROGRESS_COMPLETE_COLOR;   // green
 	private static final Color BEHIND_COLOR = ColorScheme.PROGRESS_ERROR_COLOR;     // red
-	private static final int ICON_SIZE = 18;
 	private static final int GRID_COLUMNS = 3;
 	private static final int REACH_LIMIT = 10;
 
-	private final SpriteManager spriteManager;
-	private final ItemManager itemManager;
-	private final ImageIcon trophyIcon;
+	private final IconLoader iconLoader;
 	private final JPanel body = new JPanel();
 	private final JLabel statusLabel = new JLabel("Not refreshed yet", SwingConstants.CENTER);
 	private Runnable onRefresh;
@@ -70,13 +61,9 @@ public class RivalryPanel extends PluginPanel
 	private List<PlayerStanding> lastStandings = Collections.emptyList();
 	private String lastLocalPlayer = "";
 
-	RivalryPanel(SpriteManager spriteManager, ItemManager itemManager)
+	RivalryPanel(IconLoader iconLoader)
 	{
-		this.spriteManager = spriteManager;
-		this.itemManager = itemManager;
-
-		BufferedImage trophy = ImageUtil.loadImageResource(getClass(), "/trophy.png");
-		this.trophyIcon = new ImageIcon(trophy.getScaledInstance(ICON_SIZE, ICON_SIZE, Image.SCALE_SMOOTH));
+		this.iconLoader = iconLoader;
 
 		JLabel title = new JLabel("Rivalry", SwingConstants.CENTER);
 		title.setFont(FontManager.getRunescapeBoldFont().deriveFont(Font.BOLD, 16f));
@@ -372,7 +359,7 @@ public class RivalryPanel extends PluginPanel
 		row.setBorder(BorderFactory.createEmptyBorder(6, 6, 4, 6));
 		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
 		row.setAlignmentX(CENTER_ALIGNMENT);
-		applyIcon(row, aggregate);
+		iconLoader.apply(row, aggregate);
 		return row;
 	}
 
@@ -498,7 +485,7 @@ public class RivalryPanel extends PluginPanel
 		row.setAlignmentX(LEFT_ALIGNMENT);
 
 		JLabel icon = new JLabel();
-		applyIcon(icon, stat);
+		iconLoader.apply(icon, stat);
 
 		JLabel name = new JLabel(stat.getName());
 		name.setFont(FontManager.getRunescapeSmallFont());
@@ -559,52 +546,8 @@ public class RivalryPanel extends PluginPanel
 		// Centre the icon+value within each (full-width) grid cell so columns are even.
 		cell.setHorizontalAlignment(SwingConstants.CENTER);
 		cell.setToolTipText(stat.getName() + (stat.isHoldsCrown() ? "  (crown)" : ""));
-		applyIcon(cell, stat);
+		iconLoader.apply(cell, stat);
 		return cell;
-	}
-
-	private void applyIcon(JLabel label, CategoryStat stat)
-	{
-		if (stat.getSpriteId() > 0)
-		{
-			loadSpriteIcon(label, stat.getSpriteId());
-		}
-		else if (stat.getItemId() > 0)
-		{
-			loadItemIcon(label, stat.getItemId());
-		}
-		else if (stat.isAggregate())
-		{
-			label.setIcon(trophyIcon);
-		}
-	}
-
-	private void loadSpriteIcon(JLabel cell, int spriteId)
-	{
-		spriteManager.getSpriteAsync(spriteId, 0, img ->
-		{
-			if (img == null)
-			{
-				return;
-			}
-			SwingUtilities.invokeLater(() ->
-			{
-				cell.setIcon(new ImageIcon(img.getScaledInstance(ICON_SIZE, ICON_SIZE, Image.SCALE_SMOOTH)));
-				cell.revalidate();
-				cell.repaint();
-			});
-		});
-	}
-
-	private void loadItemIcon(JLabel cell, int itemId)
-	{
-		AsyncBufferedImage img = itemManager.getImage(itemId);
-		img.onLoaded(() -> SwingUtilities.invokeLater(() ->
-		{
-			cell.setIcon(new ImageIcon(img.getScaledInstance(ICON_SIZE, ICON_SIZE, Image.SCALE_SMOOTH)));
-			cell.revalidate();
-			cell.repaint();
-		}));
 	}
 
 	private static String formatValue(CategoryStat stat)

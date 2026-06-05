@@ -22,8 +22,6 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.events.ConfigChanged;
-import net.runelite.client.game.ItemManager;
-import net.runelite.client.game.SpriteManager;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
@@ -74,10 +72,7 @@ public class RivalryPlugin extends Plugin
 	private ClientThread clientThread;
 
 	@Inject
-	private SpriteManager spriteManager;
-
-	@Inject
-	private ItemManager itemManager;
+	private IconLoader iconLoader;
 
 	@Inject
 	private RosterResolver rosterResolver;
@@ -109,7 +104,7 @@ public class RivalryPlugin extends Plugin
 	@Override
 	protected void startUp()
 	{
-		panel = new RivalryPanel(spriteManager, itemManager);
+		panel = new RivalryPanel(iconLoader);
 		panel.setRefreshCallback(this::triggerRefresh);
 
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "/rivalry_icon.png");
