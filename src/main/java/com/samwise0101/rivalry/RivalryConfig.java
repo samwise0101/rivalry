@@ -1,22 +1,20 @@
 package com.samwise0101.rivalry;
 
-import java.awt.Color;
-import java.awt.TrayIcon;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigSection;
-import net.runelite.client.config.FlashNotification;
-import net.runelite.client.config.Notification;
-import net.runelite.client.config.NotificationSound;
 import net.runelite.client.config.Range;
-import net.runelite.client.config.RequestFocusType;
 
 @ConfigGroup(RivalryConfig.GROUP)
 public interface RivalryConfig extends Config
 {
 	String GROUP = "rivalry";
 	String CROWN_NOTIFICATION_KEY = "crownNotification";
+	String CROWN_NOTIFICATIONS_ENABLED_KEY = "crownNotificationsEnabled";
+	String CROWN_GAME_MESSAGE_KEY = "crownGameMessage";
+	String CROWN_NOTIFICATION_SOUND_KEY = "crownNotificationSound";
+	String CROWN_NOTIFICATION_VOLUME_KEY = "crownNotificationVolume";
 	String OLD_NOTIFY_GAME_CHAT_KEY = "notifyGameChat";
 	String OLD_NOTIFY_DESKTOP_KEY = "notifyDesktop";
 
@@ -222,33 +220,51 @@ public interface RivalryConfig extends Config
 	String notificationsSection = "notifications";
 
 	@ConfigItem(
-		keyName = CROWN_NOTIFICATION_KEY,
-		name = "Crown notification",
+		keyName = CROWN_NOTIFICATIONS_ENABLED_KEY,
+		name = "Crown notifications",
 		description = "Notify you when you gain or lose a crown",
 		section = notificationsSection,
 		position = 31
 	)
-	default Notification crownNotification()
+	default boolean crownNotificationsEnabled()
 	{
-		return crownNotification(true, false);
+		return true;
 	}
 
-	static Notification crownNotification(boolean gameMessage, boolean tray)
+	@ConfigItem(
+		keyName = CROWN_GAME_MESSAGE_KEY,
+		name = "Game message",
+		description = "Show crown notifications in the chatbox",
+		section = notificationsSection,
+		position = 32
+	)
+	default boolean crownGameMessage()
 	{
-		return new Notification(
-			gameMessage || tray,
-			true,
-			true,
-			tray,
-			TrayIcon.MessageType.NONE,
-			RequestFocusType.OFF,
-			NotificationSound.OFF,
-			null,
-			100,
-			10000,
-			gameMessage,
-			FlashNotification.DISABLED,
-			new Color(255, 0, 0, 70),
-			false);
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = CROWN_NOTIFICATION_SOUND_KEY,
+		name = "Notification sound",
+		description = "Play success and failure sounds for crown notifications",
+		section = notificationsSection,
+		position = 33
+	)
+	default boolean crownNotificationSound()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = CROWN_NOTIFICATION_VOLUME_KEY,
+		name = "Notification volume",
+		description = "Volume for crown notification sounds",
+		section = notificationsSection,
+		position = 34
+	)
+	@Range(min = 0, max = 100)
+	default int crownNotificationVolume()
+	{
+		return 100;
 	}
 }

@@ -1,17 +1,31 @@
 package com.samwise0101.rivalry;
 
 import com.google.inject.Provides;
+import java.awt.Color;
+import java.awt.TrayIcon;
 import java.awt.image.BufferedImage;
+import java.io.BufferedInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import javax.sound.sampled.AudioInputStream;
+import javax.sound.sampled.AudioSystem;
+import javax.sound.sampled.Clip;
+import javax.sound.sampled.FloatControl;
+import javax.sound.sampled.LineEvent;
+import javax.sound.sampled.LineUnavailableException;
+import javax.sound.sampled.UnsupportedAudioFileException;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
@@ -21,6 +35,10 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.config.FlashNotification;
+import net.runelite.client.config.Notification;
+import net.runelite.client.config.NotificationSound;
+import net.runelite.client.config.RequestFocusType;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -42,6 +60,8 @@ public class RivalryPlugin extends Plugin
 
 	private static final long LOGIN_REFRESH_DELAY_SECONDS = 10;
 	private static final long STARTUP_REFRESH_DELAY_SECONDS = 3;
+	private static final String SUCCESS_SOUND = "/success.wav";
+	private static final String FAILURE_SOUND = "/failure.wav";
 
 	private static final String KEY_POLL_INTERVAL = "pollIntervalMinutes";
 	// Config keys that change only how data is shown — recompute from cache, no re-fetch.
@@ -50,7 +70,10 @@ public class RivalryPlugin extends Plugin
 	// Config keys that only affect notification delivery — no recompute needed.
 	private static final Set<String> NOTIFICATION_KEYS =
 		Set.of(
-			RivalryConfig.CROWN_NOTIFICATION_KEY,
+			RivalryConfig.CROWN_NOTIFICATIONS_ENABLED_KEY,
+			RivalryConfig.CROWN_GAME_MESSAGE_KEY,
+			RivalryConfig.CROWN_NOTIFICATION_SOUND_KEY,
+			RivalryConfig.CROWN_NOTIFICATION_VOLUME_KEY,
 			RivalryConfig.OLD_NOTIFY_GAME_CHAT_KEY,
 			RivalryConfig.OLD_NOTIFY_DESKTOP_KEY);
 
@@ -90,6 +113,10 @@ public class RivalryPlugin extends Plugin
 	private RivalryPanel panel;
 	private NavigationButton navButton;
 	private ScheduledFuture<?> pollTask;
+	private final Object notificationSoundLock = new Object();
+	private final Queue<QueuedNotificationSound> notificationSoundQueue = new ArrayDeque<>();
+	private boolean notificationSoundActive;
+	private Clip currentNotificationClip;
 
 	// Cached on the client thread (GameTick) so executor threads can read it safely.
 	private volatile String localPlayerName;
@@ -141,6 +168,7 @@ public class RivalryPlugin extends Plugin
 			pollTask.cancel(false);
 			pollTask = null;
 		}
+		clearNotificationSoundQueue();
 		seeded = false;
 		log.info("Rivalry stopped");
 	}
@@ -210,25 +238,56 @@ public class RivalryPlugin extends Plugin
 
 	private void migrateNotificationConfig()
 	{
-		if (configManager.getConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_NOTIFICATION_KEY) != null)
-		{
-			return;
-		}
-
+		Notification oldNotification = getOldCrownNotification();
 		String oldGameChat = configManager.getConfiguration(RivalryConfig.GROUP, RivalryConfig.OLD_NOTIFY_GAME_CHAT_KEY);
-		String oldDesktop = configManager.getConfiguration(RivalryConfig.GROUP, RivalryConfig.OLD_NOTIFY_DESKTOP_KEY);
-		if (oldGameChat == null && oldDesktop == null)
+
+		if (configManager.getConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_NOTIFICATIONS_ENABLED_KEY) == null)
 		{
-			return;
+			boolean enabled = oldNotification == null || oldNotification.isEnabled();
+			configManager.setConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_NOTIFICATIONS_ENABLED_KEY, enabled);
 		}
 
-		boolean gameChat = oldGameChat == null || Boolean.parseBoolean(oldGameChat);
-		boolean desktop = oldDesktop != null && Boolean.parseBoolean(oldDesktop);
-		configManager.setConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_NOTIFICATION_KEY,
-			RivalryConfig.crownNotification(gameChat, desktop));
+		if (configManager.getConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_GAME_MESSAGE_KEY) == null)
+		{
+			boolean gameMessage = oldNotification != null
+				? oldNotification.isGameMessage()
+				: oldGameChat == null || Boolean.parseBoolean(oldGameChat);
+			configManager.setConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_GAME_MESSAGE_KEY, gameMessage);
+		}
+
+		if (oldNotification != null)
+		{
+			if (configManager.getConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_NOTIFICATION_SOUND_KEY) == null)
+			{
+				configManager.setConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_NOTIFICATION_SOUND_KEY,
+					oldNotification.isEnabled() && oldNotification.getSound() != NotificationSound.OFF);
+			}
+
+			if (configManager.getConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_NOTIFICATION_VOLUME_KEY) == null)
+			{
+				configManager.setConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_NOTIFICATION_VOLUME_KEY,
+					oldNotification.getVolume());
+			}
+		}
+
+		configManager.unsetConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_NOTIFICATION_KEY);
 		configManager.unsetConfiguration(RivalryConfig.GROUP, RivalryConfig.OLD_NOTIFY_GAME_CHAT_KEY);
 		configManager.unsetConfiguration(RivalryConfig.GROUP, RivalryConfig.OLD_NOTIFY_DESKTOP_KEY);
 		log.debug("Migrated Rivalry notification config");
+	}
+
+	private Notification getOldCrownNotification()
+	{
+		try
+		{
+			return configManager.getConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_NOTIFICATION_KEY,
+				Notification.class);
+		}
+		catch (Exception e)
+		{
+			log.debug("Could not read old Rivalry crown notification config", e);
+			return null;
+		}
 	}
 
 	// -------------------------------------------------------------------------
@@ -352,13 +411,13 @@ public class RivalryPlugin extends Plugin
 
 				if (localGained)
 				{
-					notify("You claimed the " + name + " crown!");
+					notify("You claimed the " + name + " crown!", SUCCESS_SOUND);
 				}
 				else if (localHeld)
 				{
 					notify(newHolder != null
 						? "You lost the " + name + " crown to " + newHolder + "!"
-						: "You lost the " + name + " crown!");
+						: "You lost the " + name + " crown!", FAILURE_SOUND);
 				}
 			}
 
@@ -373,8 +432,152 @@ public class RivalryPlugin extends Plugin
 		return (a == null ? "" : a).equalsIgnoreCase(b == null ? "" : b);
 	}
 
-	private void notify(String message)
+	private void notify(String message, String soundResource)
 	{
-		notifier.notify(config.crownNotification(), message);
+		if (!config.crownNotificationsEnabled())
+		{
+			return;
+		}
+
+		notifier.notify(crownNotification(), message);
+		playNotificationSound(soundResource);
+	}
+
+	private Notification crownNotification()
+	{
+		return new Notification(
+			true,
+			true,
+			true,
+			false,
+			TrayIcon.MessageType.NONE,
+			RequestFocusType.OFF,
+			NotificationSound.OFF,
+			null,
+			100,
+			0,
+			config.crownGameMessage(),
+			FlashNotification.DISABLED,
+			new Color(255, 0, 0, 70),
+			true);
+	}
+
+	private void playNotificationSound(String resourcePath)
+	{
+		if (!config.crownNotificationsEnabled() || !config.crownNotificationSound())
+		{
+			return;
+		}
+
+		int volume = Math.max(0, Math.min(100, config.crownNotificationVolume()));
+		if (volume == 0)
+		{
+			return;
+		}
+
+		boolean shouldStart;
+		synchronized (notificationSoundLock)
+		{
+			notificationSoundQueue.add(new QueuedNotificationSound(resourcePath, volume));
+			shouldStart = !notificationSoundActive;
+			notificationSoundActive = true;
+		}
+
+		if (shouldStart)
+		{
+			executor.execute(this::playNextNotificationSound);
+		}
+	}
+
+	private void playNextNotificationSound()
+	{
+		QueuedNotificationSound sound;
+		synchronized (notificationSoundLock)
+		{
+			sound = notificationSoundQueue.poll();
+			if (sound == null)
+			{
+				notificationSoundActive = false;
+				currentNotificationClip = null;
+				return;
+			}
+		}
+
+		try (InputStream resourceStream = getClass().getResourceAsStream(sound.resourcePath))
+		{
+			if (resourceStream == null)
+			{
+				log.debug("Notification sound resource not found: {}", sound.resourcePath);
+				executor.execute(this::playNextNotificationSound);
+				return;
+			}
+
+			try (AudioInputStream audioStream =
+				AudioSystem.getAudioInputStream(new BufferedInputStream(resourceStream)))
+			{
+				Clip clip = AudioSystem.getClip();
+				clip.addLineListener(event ->
+				{
+					if (event.getType() == LineEvent.Type.STOP)
+					{
+						event.getLine().close();
+						executor.execute(this::playNextNotificationSound);
+					}
+				});
+				clip.open(audioStream);
+				applyVolume(clip, sound.volume);
+				synchronized (notificationSoundLock)
+				{
+					currentNotificationClip = clip;
+				}
+				clip.start();
+			}
+		}
+		catch (IOException | LineUnavailableException | UnsupportedAudioFileException e)
+		{
+			log.debug("Unable to play notification sound {}", sound.resourcePath, e);
+			executor.execute(this::playNextNotificationSound);
+		}
+	}
+
+	private static void applyVolume(Clip clip, int volume)
+	{
+		if (!clip.isControlSupported(FloatControl.Type.MASTER_GAIN))
+		{
+			return;
+		}
+
+		FloatControl gain = (FloatControl) clip.getControl(FloatControl.Type.MASTER_GAIN);
+		float scaledGain = (float) (20.0 * Math.log10(volume / 100.0));
+		gain.setValue(Math.max(gain.getMinimum(), Math.min(gain.getMaximum(), scaledGain)));
+	}
+
+	private void clearNotificationSoundQueue()
+	{
+		Clip clip;
+		synchronized (notificationSoundLock)
+		{
+			notificationSoundQueue.clear();
+			notificationSoundActive = false;
+			clip = currentNotificationClip;
+			currentNotificationClip = null;
+		}
+
+		if (clip != null)
+		{
+			clip.close();
+		}
+	}
+
+	private static final class QueuedNotificationSound
+	{
+		private final String resourcePath;
+		private final int volume;
+
+		private QueuedNotificationSound(String resourcePath, int volume)
+		{
+			this.resourcePath = resourcePath;
+			this.volume = volume;
+		}
 	}
 }
