@@ -1,4 +1,10 @@
-# Rivalry
+<div align="center" style="max-width: 760px; margin: 0 auto;">
+
+<h1 align="center">
+  <img src="icon.png" alt="Crown" width="32" height="32" />
+  RIVALRY
+  <img src="icon.png" alt="Crown" width="32" height="32" />
+</h1>
 
 Turn the hiscores into a competition.
 
@@ -23,30 +29,27 @@ see who is winning overall, then lets you drill into the details.
 
 Instead of asking "who has better stats?", Rivalry answers better questions:
 
-- Which crowns do I currently hold?
-- Which rival is beating me overall?
-- What are they beating me in?
-- Which crowns am I closest to taking?
-- Did someone just overtake me?
+<p>
+Which crowns do I currently hold?<br>
+Which rival is beating me overall?<br>
+What are they beating me in?<br>
+Which crowns am I closest to taking?<br>
+Did someone just overtake me?
+</p>
 
 ## Features
 
-- **Crown leaderboard**: players are ranked by how many category crowns they
-  currently hold.
-- **Crowns across the hiscores**: track skills, bosses, clue scrolls, minigames,
-  and other hiscore activities.
-- **Aggregate crowns**: compete for Total Level and Total Boss KC in addition to
-  individual categories.
-- **Detailed breakdowns**: expand any player to see Skills, Bosses, and Other
-  tabs with category-by-category gaps.
-- **Within Reach**: see the crowns you do not hold yet, sorted by the smallest
-  gap first.
-- **Skill XP mode**: for skills, compare by visible level or by XP so level-99
-  rivalries still matter.
-- **Crown notifications**: get notified when you claim a crown or lose one.
-- **Manual rivals**: enter up to five usernames directly.
-- **Wise Old Man groups**: optionally populate rivals from a Wise Old Man group
-  and track the most recently active members.
+<p>
+<strong>Crown leaderboard:</strong> players are ranked by how many category crowns they currently hold.<br><br>
+<strong>Crowns across the hiscores:</strong> track skills, bosses, clue scrolls, minigames, and other hiscore activities.<br><br>
+<strong>Aggregate crowns:</strong> compete for Total Level and Total Boss KC in addition to individual categories.<br><br>
+<strong>Detailed breakdowns:</strong> expand any player to see Skills, Bosses, and Other tabs with category-by-category gaps.<br><br>
+<strong>Within Reach:</strong> see the crowns you do not hold yet, sorted by the smallest gap first.<br><br>
+<strong>Skill XP mode:</strong> for skills, compare by visible level or by XP so level-99 rivalries still matter.<br><br>
+<strong>Crown notifications:</strong> get notified when you claim a crown or lose one.<br><br>
+<strong>Manual rivals:</strong> enter up to five usernames directly.<br><br>
+<strong>Wise Old Man groups:</strong> optionally populate rivals from a Wise Old Man group and track the most recently active members.
+</p>
 
 [GIF placeholder: Expanding a rival row and switching between Skills, Bosses, and Other tabs.]
 
@@ -69,23 +72,24 @@ activities use their hiscore score, kill count, or completion count.
 
 The side panel is built for quick checks:
 
-- **Your Crowns** shows how many crowns you hold out of all crowns currently in
-  play.
-- **Rivals** ranks everyone by crown count.
-- **Expanded player rows** show category gaps with compact icons and color-coded
-  numbers.
-- **Within Reach** highlights your closest targets so you can decide what to do
-  next.
+<p>
+<strong>Your Crowns</strong> shows how many crowns you hold out of all crowns currently in play.<br><br>
+<strong>Rivals</strong> ranks everyone by crown count.<br><br>
+<strong>Expanded player rows</strong> show category gaps with compact icons and color-coded numbers.<br><br>
+<strong>Within Reach</strong> highlights your closest targets so you can decide what to do next.
+</p>
 
 [Screenshot placeholder: Color-coded category grid with crown holder margins and deficits.]
 
 ## Setup
 
-1. Install **Rivalry** from the RuneLite Plugin Hub.
-2. Enable the plugin.
-3. Open the Rivalry panel from the crown icon in the side toolbar.
-4. Add rivals manually, or enable Wise Old Man group mode in the plugin settings.
-5. Click **Refresh Now** or let the plugin refresh on its polling interval.
+<p>
+<strong>1.</strong> Install <strong>Rivalry</strong> from the RuneLite Plugin Hub.<br>
+<strong>2.</strong> Enable the plugin.<br>
+<strong>3.</strong> Open the Rivalry panel from the crown icon in the side toolbar.<br>
+<strong>4.</strong> Add rivals manually, or enable Wise Old Man group mode in the plugin settings.<br>
+<strong>5.</strong> Click <strong>Refresh Now</strong> or let the plugin refresh on its polling interval.
+</p>
 
 ### Manual Rivals
 
@@ -96,14 +100,19 @@ Use the **Rivals** settings to enter up to five OSRS usernames.
 If your friends or clan already use Wise Old Man, Rivalry can populate the rival
 list from a group:
 
-1. Enable **Use Wise Old Man group**.
-2. Enter the numeric group ID from `wiseoldman.net/groups/<id>`.
-3. Choose how many recently active members to track.
+<p>
+<strong>1.</strong> Enable <strong>Use Wise Old Man group</strong>.<br>
+<strong>2.</strong> Enter the numeric group ID from <code>wiseoldman.net/groups/&lt;id&gt;</code>.<br>
+<strong>3.</strong> Choose how many recently active members to track.
+</p>
 
 This option contacts Wise Old Man, a third-party service, to read group
 membership. It is disabled by default and must be enabled manually.
 
 ## Settings At A Glance
+
+<div align="center">
+<div align="left" style="display: inline-block;">
 
 | Section | Setting | What it does |
 |---|---|---|
@@ -116,14 +125,17 @@ membership. It is disabled by default and must be enabled manually.
 | Polling | Poll interval | Controls automatic hiscore refresh timing |
 | Notifications | Crown notification | Controls how crown gain/loss alerts are delivered |
 
+</div>
+</div>
+
 ## Notes
 
-- Hiscores update when players log out, so very recent progress may not appear
-  immediately.
-- Rivalry uses the normal OSRS hiscores.
-- Only players who appear on the normal hiscores can be tracked.
-- Wise Old Man is used only to find group members. Hiscore comparison still uses
-  the official OSRS hiscores.
+<p>
+Hiscores update when players log out, so very recent progress may not appear immediately.<br><br>
+Rivalry uses the normal OSRS hiscores.<br><br>
+Only players who appear on the normal hiscores can be tracked.<br><br>
+Wise Old Man is used only to find group members. Hiscore comparison still uses the official OSRS hiscores.
+</p>
 
 ## Maintainers
 
@@ -132,3 +144,5 @@ Technical documentation lives in [docs/](docs/OVERVIEW.md).
 ## License
 
 BSD 2-Clause. See [LICENSE](LICENSE).
+
+</div>
