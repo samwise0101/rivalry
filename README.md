@@ -16,7 +16,7 @@ Whether you are racing friends, comparing clanmates, or just want a little more
 motivation to send one more boss trip, Rivalry turns passive hiscore numbers into
 a live scoreboard.
 
-[Screenshot placeholder: Rivalry side panel showing the crown summary, rivals leaderboard, and expanded player breakdown.]
+![Rivalry side panel showing the crown summary, rivals leaderboard, and expanded player breakdown](src/main/resources/Browse_Rival_Leaderboard.gif)
 
 ## Why Use Rivalry?
 
@@ -44,16 +44,22 @@ Did someone just overtake me?
 <strong>Crowns across the hiscores:</strong> track skills, bosses, clue scrolls, minigames, and other hiscore activities.<br><br>
 <strong>Aggregate crowns:</strong> compete for Total Level and Total Boss KC in addition to individual categories.<br><br>
 <strong>Detailed breakdowns:</strong> expand any player to see Skills, Bosses, and Other tabs with category-by-category gaps.<br><br>
-<strong>Within Reach:</strong> see the crowns you do not hold yet, sorted by the smallest gap first.<br><br>
+<strong>Within Reach:</strong> see the crowns you do not hold yet, sorted by the smallest gap first.
+</p>
+
+![Within Reach section showing closest crowns by level and XP](src/main/resources/Browse_Within_Reach.gif)
+
+<p>
 <strong>Skill XP mode:</strong> for skills, compare by visible level or by XP so level-99 rivalries still matter.<br><br>
-<strong>Crown notifications:</strong> get notified when you claim a crown or lose one.<br><br>
+<strong>Crown notifications:</strong> get notified when you claim a crown or lose one.
+</p>
+
+![Crown chat notifications when claiming or losing a crown](src/main/resources/Crown_Chat_Notifications.gif)
+
+<p>
 <strong>Manual rivals:</strong> enter up to five usernames directly.<br><br>
 <strong>Wise Old Man groups:</strong> optionally populate rivals from a Wise Old Man group and track the most recently active members.
 </p>
-
-[GIF placeholder: Expanding a rival row and switching between Skills, Bosses, and Other tabs.]
-
-[Screenshot placeholder: Within Reach section showing closest crowns by level and XP.]
 
 ## How It Works
 
@@ -79,8 +85,6 @@ The side panel is built for quick checks:
 <strong>Within Reach</strong> highlights your closest targets so you can decide what to do next.
 </p>
 
-[Screenshot placeholder: Color-coded category grid with crown holder margins and deficits.]
-
 ## Setup
 
 <p>
@@ -95,6 +99,8 @@ The side panel is built for quick checks:
 
 Use the **Rivals** settings to enter up to five OSRS usernames.
 
+![Adding rivals manually via the settings panel](src/main/resources/Add_Rivals_Manual.gif)
+
 ### Wise Old Man Group
 
 If your friends or clan already use Wise Old Man, Rivalry can populate the rival
@@ -108,6 +114,8 @@ list from a group:
 
 This option contacts Wise Old Man, a third-party service, to read group
 membership. It is disabled by default and must be enabled manually.
+
+![Adding rivals from a Wise Old Man group](src/main/resources/Add_Rivals_WOM.gif)
 
 ## Settings At A Glance
 
