@@ -77,17 +77,7 @@ public class WomClient
 						return;
 					}
 
-					List<String> members = new ArrayList<>();
-					group.memberships.stream()
-						.filter(m -> m.player != null && m.player.name() != null)
-						// Most recently active first (ISO-8601 strings sort chronologically).
-						.sorted(Comparator.comparing(
-							(WomMembership m) -> m.player.lastChangedAt == null ? "" : m.player.lastChangedAt)
-							.reversed())
-						.limit(Math.max(1, maxMembers))
-						.forEach(m -> members.add(m.player.name()));
-
-					onSuccess.accept(members);
+					onSuccess.accept(selectMembers(group, maxMembers));
 				}
 				catch (Exception e)
 				{
@@ -97,19 +87,42 @@ public class WomClient
 		});
 	}
 
+	/**
+	 * Picks the members to track: most recently active first (lastChangedAt
+	 * descending, nulls last), limited to {@code maxMembers}, using displayName
+	 * with a username fallback. Pure — unit tested directly.
+	 */
+	static List<String> selectMembers(WomGroup group, int maxMembers)
+	{
+		List<String> members = new ArrayList<>();
+		if (group == null || group.memberships == null)
+		{
+			return members;
+		}
+		group.memberships.stream()
+			.filter(m -> m != null && m.player != null && m.player.name() != null)
+			// ISO-8601 timestamps sort chronologically as strings.
+			.sorted(Comparator.comparing(
+				(WomMembership m) -> m.player.lastChangedAt == null ? "" : m.player.lastChangedAt)
+				.reversed())
+			.limit(Math.max(1, maxMembers))
+			.forEach(m -> members.add(m.player.name()));
+		return members;
+	}
+
 	// --- Minimal Gson models (unknown fields are ignored) ---
 
-	private static class WomGroup
+	static class WomGroup
 	{
 		List<WomMembership> memberships;
 	}
 
-	private static class WomMembership
+	static class WomMembership
 	{
 		WomPlayer player;
 	}
 
-	private static class WomPlayer
+	static class WomPlayer
 	{
 		String username;
 		String displayName;
