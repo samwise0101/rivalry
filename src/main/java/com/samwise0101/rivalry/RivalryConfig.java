@@ -194,6 +194,18 @@ public interface RivalryConfig extends Config
 		return false;
 	}
 
+	@ConfigItem(
+		keyName = "showDemoControls",
+		name = "Show demo controls",
+		description = "Show the demo recording buttons at the bottom of the panel",
+		section = displaySection,
+		position = 17
+	)
+	default boolean showDemoControls()
+	{
+		return true;
+	}
+
 	@ConfigSection(
 		name = "Polling",
 		description = "How often to check the hiscores",

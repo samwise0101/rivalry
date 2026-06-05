@@ -15,11 +15,15 @@ import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
+import net.runelite.api.ChatLineBuffer;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.MessageNode;
 import net.runelite.api.Player;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.config.ConfigManager;
@@ -46,11 +50,21 @@ public class RivalryPlugin extends Plugin
 	private static final long STARTUP_REFRESH_DELAY_SECONDS = 3;
 
 	private static final String KEY_POLL_INTERVAL = "pollIntervalMinutes";
+	private static final String KEY_SHOW_DEMO_CONTROLS = "showDemoControls";
+	private static final String DEMO_LOCAL_PLAYER = "AshenPike7";
 	private static final List<String> DEMO_MESSAGES = List.of(
 		"You claimed the Agility crown!",
-		"You lost the Vorkath crown to Maple Sage!",
+		"You lost the Vorkath crown to M4pleSage!",
 		"You claimed the Total Level crown!",
-		"You lost the Clue Scrolls (hard) crown to Ashen Pike!");
+		"You lost the Clue Scrolls (hard) crown to Violet_Helm!",
+		"You claimed the Zulrah crown!",
+		"You lost the Slayer crown to Cinder_Bow!",
+		"You claimed the Prayer crown!",
+		"You lost the Chambers of Xeric crown to AshenPike7!",
+		"You claimed the Clue Scrolls (elite) crown!",
+		"You lost the Mining crown to M4pleSage!",
+		"You claimed the Theatre of Blood crown!",
+		"You lost the Woodcutting crown to Violet_Helm!");
 	// Config keys that change only how data is shown — recompute from cache, no re-fetch.
 	private static final Set<String> DISPLAY_KEYS =
 		Set.of("trackSkills", "trackBosses", "trackClues", "gapToNextPlayer");
@@ -121,6 +135,8 @@ public class RivalryPlugin extends Plugin
 		panel = new RivalryPanel(iconLoader);
 		panel.setRefreshCallback(this::triggerRefresh);
 		panel.setTestMessageCallback(this::fireDemoMessage);
+		panel.setClearChatCallback(this::clearChat);
+		panel.setShowDemoControls(config.showDemoControls());
 
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "/rivalry_icon.png");
 		navButton = NavigationButton.builder()
@@ -182,6 +198,7 @@ public class RivalryPlugin extends Plugin
 		{
 			localPlayerName = name;
 		}
+		applyDemoChatInputName();
 	}
 
 	@Subscribe
@@ -196,6 +213,10 @@ public class RivalryPlugin extends Plugin
 		if (KEY_POLL_INTERVAL.equals(key))
 		{
 			schedulePoll();
+		}
+		else if (KEY_SHOW_DEMO_CONTROLS.equals(key))
+		{
+			panel.setShowDemoControls(config.showDemoControls());
 		}
 		else if (NOTIFICATION_KEYS.contains(key))
 		{
@@ -395,5 +416,50 @@ public class RivalryPlugin extends Plugin
 		String message = DEMO_MESSAGES.get(demoMessageIndex);
 		demoMessageIndex = (demoMessageIndex + 1) % DEMO_MESSAGES.size();
 		clientThread.invoke(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null));
+	}
+
+	private void clearChat()
+	{
+		clientThread.invoke(() ->
+		{
+			for (ChatLineBuffer buffer : client.getChatLineMap().values())
+			{
+				for (MessageNode node : buffer.getLines())
+				{
+					if (node != null)
+					{
+						buffer.removeMessageNode(node);
+					}
+				}
+			}
+			client.refreshChat();
+		});
+	}
+
+	private void applyDemoChatInputName()
+	{
+		Widget input = client.getWidget(InterfaceID.Chatbox.INPUT);
+		if (input == null)
+		{
+			return;
+		}
+
+		String text = input.getText();
+		if (text == null || !text.contains(": Press Enter to Chat"))
+		{
+			return;
+		}
+
+		String realName = localPlayerName;
+		if (realName != null && !realName.isBlank() && text.contains(realName))
+		{
+			input.setText(text.replace(realName, DEMO_LOCAL_PLAYER));
+			return;
+		}
+
+		int promptStart = text.indexOf(": Press Enter to Chat");
+		int nameStart = text.lastIndexOf('>', promptStart);
+		nameStart = nameStart >= 0 ? nameStart + 1 : 0;
+		input.setText(text.substring(0, nameStart) + DEMO_LOCAL_PLAYER + text.substring(promptStart));
 	}
 }

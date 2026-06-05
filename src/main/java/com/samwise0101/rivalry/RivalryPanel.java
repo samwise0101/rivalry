@@ -49,6 +49,7 @@ public class RivalryPanel extends PluginPanel
 	private final JLabel statusLabel = new JLabel("Not refreshed yet", SwingConstants.CENTER);
 	private Runnable onRefresh;
 	private Runnable onTestMessage;
+	private Runnable onClearChat;
 
 	// Per-player expand state and last-open tab.
 	private final Set<String> expanded = new HashSet<>();
@@ -59,6 +60,7 @@ public class RivalryPanel extends PluginPanel
 	private boolean reachExpanded = true;
 	private String reachSelectedTab = "Skills";
 	private String reachSkillsMode = "By Level";
+	private boolean showDemoControls = true;
 
 	// Last data received, so section toggles can re-render without a refresh.
 	private List<PlayerStanding> lastStandings = Collections.emptyList();
@@ -94,6 +96,20 @@ public class RivalryPanel extends PluginPanel
 	void setTestMessageCallback(Runnable callback)
 	{
 		this.onTestMessage = callback;
+	}
+
+	void setClearChatCallback(Runnable callback)
+	{
+		this.onClearChat = callback;
+	}
+
+	void setShowDemoControls(boolean showDemoControls)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			this.showDemoControls = showDemoControls;
+			rebuild();
+		});
 	}
 
 	void setStatus(String message)
@@ -168,9 +184,12 @@ public class RivalryPanel extends PluginPanel
 			body.add(buildReachContent());
 		}
 
-		body.add(Box.createVerticalStrut(8));
-		body.add(buildTestMessageButton());
 		body.add(Box.createVerticalGlue());
+		if (showDemoControls)
+		{
+			body.add(Box.createVerticalStrut(96));
+			body.add(buildDemoButtons());
+		}
 		body.revalidate();
 		body.repaint();
 	}
@@ -283,20 +302,42 @@ public class RivalryPanel extends PluginPanel
 		return row;
 	}
 
-	private JComponent buildTestMessageButton()
+	private JComponent buildDemoButtons()
 	{
-		JButton button = new JButton("Fire Test Message");
-		button.setFont(FontManager.getRunescapeSmallFont());
-		button.setAlignmentX(LEFT_ALIGNMENT);
-		button.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
-		button.addActionListener(e ->
+		JPanel buttons = new JPanel();
+		buttons.setLayout(new BoxLayout(buttons, BoxLayout.Y_AXIS));
+		buttons.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		buttons.setAlignmentX(LEFT_ALIGNMENT);
+		buttons.setMaximumSize(new Dimension(Integer.MAX_VALUE, 60));
+
+		JButton testMessageButton = new JButton("Fire Test Message");
+		testMessageButton.setFont(FontManager.getRunescapeSmallFont());
+		testMessageButton.setAlignmentX(LEFT_ALIGNMENT);
+		testMessageButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+		testMessageButton.addActionListener(e ->
 		{
 			if (onTestMessage != null)
 			{
 				onTestMessage.run();
 			}
 		});
-		return button;
+
+		JButton clearChatButton = new JButton("Clear Chat");
+		clearChatButton.setFont(FontManager.getRunescapeSmallFont());
+		clearChatButton.setAlignmentX(LEFT_ALIGNMENT);
+		clearChatButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+		clearChatButton.addActionListener(e ->
+		{
+			if (onClearChat != null)
+			{
+				onClearChat.run();
+			}
+		});
+
+		buttons.add(testMessageButton);
+		buttons.add(Box.createVerticalStrut(4));
+		buttons.add(clearChatButton);
+		return buttons;
 	}
 
 	private JComponent buildExpandSection(PlayerStanding standing)
