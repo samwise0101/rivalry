@@ -14,11 +14,13 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Player;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -44,6 +46,11 @@ public class RivalryPlugin extends Plugin
 	private static final long STARTUP_REFRESH_DELAY_SECONDS = 3;
 
 	private static final String KEY_POLL_INTERVAL = "pollIntervalMinutes";
+	private static final List<String> DEMO_MESSAGES = List.of(
+		"You claimed the Agility crown!",
+		"You lost the Vorkath crown to Maple Sage!",
+		"You claimed the Total Level crown!",
+		"You lost the Clue Scrolls (hard) crown to Ashen Pike!");
 	// Config keys that change only how data is shown — recompute from cache, no re-fetch.
 	private static final Set<String> DISPLAY_KEYS =
 		Set.of("trackSkills", "trackBosses", "trackClues", "gapToNextPlayer");
@@ -56,6 +63,9 @@ public class RivalryPlugin extends Plugin
 
 	@Inject
 	private Client client;
+
+	@Inject
+	private ClientThread clientThread;
 
 	@Inject
 	private RivalryConfig config;
@@ -101,6 +111,7 @@ public class RivalryPlugin extends Plugin
 	private volatile String lastComputeLocalName;
 
 	private boolean seeded = false;
+	private int demoMessageIndex = 0;
 
 	@Override
 	protected void startUp()
@@ -109,6 +120,7 @@ public class RivalryPlugin extends Plugin
 
 		panel = new RivalryPanel(iconLoader);
 		panel.setRefreshCallback(this::triggerRefresh);
+		panel.setTestMessageCallback(this::fireDemoMessage);
 
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "/rivalry_icon.png");
 		navButton = NavigationButton.builder()
@@ -376,5 +388,12 @@ public class RivalryPlugin extends Plugin
 	private void notify(String message)
 	{
 		notifier.notify(config.crownNotification(), message);
+	}
+
+	private void fireDemoMessage()
+	{
+		String message = DEMO_MESSAGES.get(demoMessageIndex);
+		demoMessageIndex = (demoMessageIndex + 1) % DEMO_MESSAGES.size();
+		clientThread.invoke(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null));
 	}
 }
