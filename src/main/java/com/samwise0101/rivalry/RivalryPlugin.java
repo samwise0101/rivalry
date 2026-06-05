@@ -14,13 +14,11 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Player;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
-import net.runelite.client.callback.ClientThread;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -51,13 +49,19 @@ public class RivalryPlugin extends Plugin
 		Set.of("trackSkills", "trackBosses", "trackClues", "gapToNextPlayer");
 	// Config keys that only affect notification delivery — no recompute needed.
 	private static final Set<String> NOTIFICATION_KEYS =
-		Set.of("notifyGameChat", "notifyDesktop");
+		Set.of(
+			RivalryConfig.CROWN_NOTIFICATION_KEY,
+			RivalryConfig.OLD_NOTIFY_GAME_CHAT_KEY,
+			RivalryConfig.OLD_NOTIFY_DESKTOP_KEY);
 
 	@Inject
 	private Client client;
 
 	@Inject
 	private RivalryConfig config;
+
+	@Inject
+	private ConfigManager configManager;
 
 	@Inject
 	private Notifier notifier;
@@ -67,9 +71,6 @@ public class RivalryPlugin extends Plugin
 
 	@Inject
 	private ScheduledExecutorService executor;
-
-	@Inject
-	private ClientThread clientThread;
 
 	@Inject
 	private IconLoader iconLoader;
@@ -104,6 +105,8 @@ public class RivalryPlugin extends Plugin
 	@Override
 	protected void startUp()
 	{
+		migrateNotificationConfig();
+
 		panel = new RivalryPanel(iconLoader);
 		panel.setRefreshCallback(this::triggerRefresh);
 
@@ -203,6 +206,29 @@ public class RivalryPlugin extends Plugin
 	RivalryConfig provideConfig(ConfigManager configManager)
 	{
 		return configManager.getConfig(RivalryConfig.class);
+	}
+
+	private void migrateNotificationConfig()
+	{
+		if (configManager.getConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_NOTIFICATION_KEY) != null)
+		{
+			return;
+		}
+
+		String oldGameChat = configManager.getConfiguration(RivalryConfig.GROUP, RivalryConfig.OLD_NOTIFY_GAME_CHAT_KEY);
+		String oldDesktop = configManager.getConfiguration(RivalryConfig.GROUP, RivalryConfig.OLD_NOTIFY_DESKTOP_KEY);
+		if (oldGameChat == null && oldDesktop == null)
+		{
+			return;
+		}
+
+		boolean gameChat = oldGameChat == null || Boolean.parseBoolean(oldGameChat);
+		boolean desktop = oldDesktop != null && Boolean.parseBoolean(oldDesktop);
+		configManager.setConfiguration(RivalryConfig.GROUP, RivalryConfig.CROWN_NOTIFICATION_KEY,
+			RivalryConfig.crownNotification(gameChat, desktop));
+		configManager.unsetConfiguration(RivalryConfig.GROUP, RivalryConfig.OLD_NOTIFY_GAME_CHAT_KEY);
+		configManager.unsetConfiguration(RivalryConfig.GROUP, RivalryConfig.OLD_NOTIFY_DESKTOP_KEY);
+		log.debug("Migrated Rivalry notification config");
 	}
 
 	// -------------------------------------------------------------------------
@@ -349,20 +375,6 @@ public class RivalryPlugin extends Plugin
 
 	private void notify(String message)
 	{
-		if (config.notifyGameChat())
-		{
-			// Client calls must run on the client thread.
-			clientThread.invoke(() ->
-			{
-				if (client.getGameState() == GameState.LOGGED_IN)
-				{
-					client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null);
-				}
-			});
-		}
-		if (config.notifyDesktop())
-		{
-			notifier.notify(message);
-		}
+		notifier.notify(config.crownNotification(), message);
 	}
 }

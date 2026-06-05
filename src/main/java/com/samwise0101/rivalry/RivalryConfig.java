@@ -1,15 +1,24 @@
 package com.samwise0101.rivalry;
 
+import java.awt.Color;
+import java.awt.TrayIcon;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigSection;
+import net.runelite.client.config.FlashNotification;
+import net.runelite.client.config.Notification;
+import net.runelite.client.config.NotificationSound;
 import net.runelite.client.config.Range;
+import net.runelite.client.config.RequestFocusType;
 
 @ConfigGroup(RivalryConfig.GROUP)
 public interface RivalryConfig extends Config
 {
 	String GROUP = "rivalry";
+	String CROWN_NOTIFICATION_KEY = "crownNotification";
+	String OLD_NOTIFY_GAME_CHAT_KEY = "notifyGameChat";
+	String OLD_NOTIFY_DESKTOP_KEY = "notifyDesktop";
 
 	@ConfigSection(
 		name = "Group",
@@ -213,26 +222,33 @@ public interface RivalryConfig extends Config
 	String notificationsSection = "notifications";
 
 	@ConfigItem(
-		keyName = "notifyGameChat",
-		name = "Game chat message",
-		description = "Show crown gain/loss in the game chat",
+		keyName = CROWN_NOTIFICATION_KEY,
+		name = "Crown notification",
+		description = "Notify you when you gain or lose a crown",
 		section = notificationsSection,
 		position = 31
 	)
-	default boolean notifyGameChat()
+	default Notification crownNotification()
 	{
-		return true;
+		return crownNotification(true, false);
 	}
 
-	@ConfigItem(
-		keyName = "notifyDesktop",
-		name = "Desktop notification",
-		description = "Show a desktop notification on crown gain/loss",
-		section = notificationsSection,
-		position = 32
-	)
-	default boolean notifyDesktop()
+	static Notification crownNotification(boolean gameMessage, boolean tray)
 	{
-		return false;
+		return new Notification(
+			gameMessage || tray,
+			true,
+			true,
+			tray,
+			TrayIcon.MessageType.NONE,
+			RequestFocusType.OFF,
+			NotificationSound.OFF,
+			null,
+			100,
+			10000,
+			gameMessage,
+			FlashNotification.DISABLED,
+			new Color(255, 0, 0, 70),
+			false);
 	}
 }

@@ -120,7 +120,7 @@ In the **Group** section:
 | Rivals | Rival 1–5 | OSRS usernames (used when WOM group is disabled) |
 | Crown Categories | Track Skills / Bosses / Activities | Which category types award crowns |
 | Polling | Poll interval | How often to refresh the hiscores (5–60 min) |
-| Notifications | Game chat message / Desktop notification | How you're told about crown changes |
+| Notifications | Crown notification | How you're told about crown changes |
 
 ## Notes & limitations
 
