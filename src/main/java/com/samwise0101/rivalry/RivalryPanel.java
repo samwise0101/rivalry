@@ -42,7 +42,7 @@ public class RivalryPanel extends PluginPanel
 	private static final int GRID_COLUMNS = 3;
 	private static final int REACH_LIMIT = 10;
 	private static final List<String> DEMO_USERNAMES =
-		List.of("Maple Sage", "Violet Helm", "Ashen Pike", "Cinder Bow");
+		List.of("M4pleSage", "Violet_Helm", "AshenPike7", "Cinder_Bow");
 
 	private final IconLoader iconLoader;
 	private final JPanel body = new JPanel();
