@@ -6,9 +6,11 @@ import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigSection;
 import net.runelite.client.config.Range;
 
-@ConfigGroup("rivalry")
+@ConfigGroup(RivalryConfig.GROUP)
 public interface RivalryConfig extends Config
 {
+	String GROUP = "rivalry";
+
 	@ConfigSection(
 		name = "Group",
 		description = "Populate rivals automatically from a Wise Old Man group",

@@ -5,10 +5,9 @@ import java.awt.image.BufferedImage;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -26,10 +25,6 @@ import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.SpriteManager;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
-import net.runelite.client.hiscore.HiscoreClient;
-import net.runelite.client.hiscore.HiscoreEndpoint;
-import net.runelite.client.hiscore.HiscoreResult;
-import net.runelite.client.hiscore.HiscoreSkill;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
@@ -55,12 +50,6 @@ public class RivalryPlugin extends Plugin
 	private RivalryConfig config;
 
 	@Inject
-	private ConfigManager configManager;
-
-	@Inject
-	private HiscoreClient hiscoreClient;
-
-	@Inject
 	private Notifier notifier;
 
 	@Inject
@@ -79,10 +68,16 @@ public class RivalryPlugin extends Plugin
 	private ItemManager itemManager;
 
 	@Inject
-	private WomClient womClient;
+	private RosterResolver rosterResolver;
+
+	@Inject
+	private HiscoreService hiscoreService;
 
 	@Inject
 	private CrownCalculator crownCalculator;
+
+	@Inject
+	private CrownStore crownStore;
 
 	private RivalryPanel panel;
 	private NavigationButton navButton;
@@ -90,14 +85,6 @@ public class RivalryPlugin extends Plugin
 
 	// Cached on the client thread (GameTick) so executor threads can read it safely.
 	private volatile String localPlayerName;
-
-	// Last successfully fetched WOM roster, for fallback when a fetch fails.
-	private volatile List<String> lastWomMembers;
-
-	// username -> last known snapshot
-	private final Map<String, PlayerSnapshot> snapshots = new HashMap<>();
-	// category id -> username of current holder (persisted key: "rivalry.crown_<id>")
-	private final Map<String, String> crownHolders = new HashMap<>();
 
 	private boolean seeded = false;
 
@@ -116,7 +103,7 @@ public class RivalryPlugin extends Plugin
 			.build();
 		clientToolbar.addNavigation(navButton);
 
-		loadPersistedCrowns();
+		crownStore.load();
 		schedulePoll();
 
 		// If the plugin is enabled while already logged in, no LOGGED_IN event fires,
@@ -138,7 +125,6 @@ public class RivalryPlugin extends Plugin
 			pollTask.cancel(false);
 			pollTask = null;
 		}
-		snapshots.clear();
 		seeded = false;
 		log.info("Rivalry stopped");
 	}
@@ -173,7 +159,7 @@ public class RivalryPlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
-		if (!"rivalry".equals(event.getGroup()))
+		if (!RivalryConfig.GROUP.equals(event.getGroup()))
 		{
 			return;
 		}
@@ -218,148 +204,62 @@ public class RivalryPlugin extends Plugin
 
 	private void refresh()
 	{
-		String localName = localPlayerName;
+		final String localName = localPlayerName;
 
-		if (config.useWomGroup())
+		rosterResolver.resolve(localName).whenComplete((roster, rosterErr) ->
 		{
-			resolveWomRoster(localName);
-		}
-		else
-		{
-			proceedRefresh(localName, buildPlayerList(localName));
-		}
-	}
-
-	/** Fetches the WOM group roster (async), then continues the normal refresh. */
-	private void resolveWomRoster(String localName)
-	{
-		int groupId = config.womGroupId();
-		if (groupId <= 0)
-		{
-			panel.setStatus("Set a WOM group ID in settings.");
-			return;
-		}
-
-		panel.setStatus("Fetching WOM group...");
-		womClient.fetchGroupMembers(groupId, config.womMaxMembers(),
-			members ->
+			if (rosterErr != null)
 			{
-				lastWomMembers = members;
-				executor.execute(() -> proceedRefresh(localName, withLocalPlayer(localName, members)));
-			},
-			error ->
+				panel.setStatus(userMessage(rosterErr));
+				return;
+			}
+			if (roster.isEmpty())
 			{
-				log.debug("WOM group fetch failed: {}", error.getMessage());
-				if (lastWomMembers != null)
+				panel.setStatus(config.useWomGroup() ? "WOM group has no members." : "Configure rivals in settings.");
+				return;
+			}
+
+			panel.setStatus("Refreshing...");
+			hiscoreService.fetch(roster).whenComplete((stats, fetchErr) ->
+			{
+				if (fetchErr != null)
 				{
-					// Fall back to the last known roster so a blip doesn't wipe standings.
-					executor.execute(() -> proceedRefresh(localName, withLocalPlayer(localName, lastWomMembers)));
+					log.warn("Hiscore fetch failed", fetchErr);
+					panel.setStatus("Refresh failed — see logs");
+					return;
 				}
-				else
-				{
-					panel.setStatus("WOM group fetch failed — check the group ID.");
-				}
+				computeAndUpdate(localName, roster, stats);
 			});
+		});
 	}
 
-	private void proceedRefresh(String localName, List<String> allPlayers)
+	private static String userMessage(Throwable t)
 	{
-		if (allPlayers.isEmpty())
-		{
-			panel.setStatus(config.useWomGroup() ? "WOM group has no members." : "Configure rivals in settings.");
-			return;
-		}
-
-		panel.setStatus("Refreshing...");
-
-		// Fetch all players' hiscores — stagger requests 500ms apart to be polite
-		for (int i = 0; i < allPlayers.size(); i++)
-		{
-			final String name = allPlayers.get(i);
-			final long delayMs = i * 500L;
-			executor.schedule(() -> fetchPlayer(name), delayMs, TimeUnit.MILLISECONDS);
-		}
-
-		// After all fetches should be done, compute crowns and update UI
-		long totalDelayMs = allPlayers.size() * 500L + 3000L;
-		executor.schedule(() -> computeAndUpdate(localName, allPlayers), totalDelayMs, TimeUnit.MILLISECONDS);
+		Throwable cause = t instanceof CompletionException && t.getCause() != null ? t.getCause() : t;
+		String message = cause.getMessage();
+		return message != null ? message : "Could not resolve rivals.";
 	}
 
-	/** Prepends the local player (if logged in and not already present) to a roster. */
-	private static List<String> withLocalPlayer(String localName, List<String> members)
-	{
-		List<String> players = new ArrayList<>();
-		if (localName != null && !localName.isEmpty())
-		{
-			players.add(localName);
-		}
-		for (String m : members)
-		{
-			if (players.stream().noneMatch(p -> p.equalsIgnoreCase(m)))
-			{
-				players.add(m);
-			}
-		}
-		return players;
-	}
-
-	private void fetchPlayer(String username)
+	private void computeAndUpdate(String localName, List<String> roster, Map<String, PlayerStats> stats)
 	{
 		try
 		{
-			HiscoreResult result = hiscoreClient.lookup(username, HiscoreEndpoint.NORMAL);
-			if (result != null)
-			{
-				snapshots.put(username.toLowerCase(), new PlayerSnapshot(username, result));
-				log.debug("Fetched hiscores for {}", username);
-			}
-			else
-			{
-				log.debug("No hiscore result for {}", username);
-			}
-		}
-		catch (Exception e)
-		{
-			log.debug("Failed to fetch hiscores for {}: {}", username, e.getMessage());
-		}
-	}
+			CrownOptions options = new CrownOptions(
+				config.trackSkills(), config.trackBosses(), config.trackClues(), config.gapToNextPlayer());
+			CrownResult result = crownCalculator.calculate(roster, stats, options);
 
-	private void computeAndUpdate(String localName, List<String> allPlayers)
-	{
-		try
-		{
-			doComputeAndUpdate(localName, allPlayers);
+			applyHolderChanges(localName, result.getHolders());
+
+			String timestamp = TIME_FMT.format(Instant.now());
+			panel.updateStandings(result.getStandings(), localName != null ? localName : "", timestamp);
 		}
 		catch (Exception e)
 		{
-			// The executor swallows exceptions silently; log and clear the status
-			// so the panel never gets stuck on "Refreshing...".
+			// Async callbacks swallow exceptions; log and clear the status so the
+			// panel never gets stuck on "Refreshing...".
 			log.warn("Failed to compute crown standings", e);
 			panel.setStatus("Refresh failed — see logs");
 		}
-	}
-
-	private void doComputeAndUpdate(String localName, List<String> allPlayers)
-	{
-		// Gather the freshly-fetched stats for the roster.
-		Map<String, PlayerStats> stats = new HashMap<>();
-		for (String p : allPlayers)
-		{
-			PlayerSnapshot snap = snapshots.get(p.toLowerCase());
-			if (snap != null)
-			{
-				stats.put(p.toLowerCase(), snap);
-			}
-		}
-
-		CrownOptions options = new CrownOptions(
-			config.trackSkills(), config.trackBosses(), config.trackClues(), config.gapToNextPlayer());
-		CrownResult result = crownCalculator.calculate(allPlayers, stats, options);
-
-		applyHolderChanges(localName, result.getHolders());
-
-		String timestamp = TIME_FMT.format(Instant.now());
-		panel.updateStandings(result.getStandings(), localName != null ? localName : "", timestamp);
 	}
 
 	/**
@@ -372,10 +272,10 @@ public class RivalryPlugin extends Plugin
 		{
 			String id = entry.getKey();
 			String newHolder = entry.getValue();
+			String prevHolder = crownStore.getHolder(id);
 
-			if (seeded && !sameHolder(newHolder, crownHolders.get(id)))
+			if (seeded && !sameHolder(newHolder, prevHolder))
 			{
-				String prevHolder = crownHolders.get(id);
 				boolean localHeld = localName != null && localName.equalsIgnoreCase(prevHolder);
 				boolean localGained = localName != null && localName.equalsIgnoreCase(newHolder);
 				String name = CrownCalculator.categoryDisplayName(id);
@@ -392,49 +292,15 @@ public class RivalryPlugin extends Plugin
 				}
 			}
 
-			persistAndStore(id, newHolder);
+			crownStore.setHolder(id, newHolder);
 		}
 
 		seeded = true;
 	}
 
-	private void persistAndStore(String id, String holder)
-	{
-		String value = holder != null ? holder : "";
-		crownHolders.put(id, value);
-		persistCrown(id, value);
-	}
-
 	private static boolean sameHolder(String a, String b)
 	{
 		return (a == null ? "" : a).equalsIgnoreCase(b == null ? "" : b);
-	}
-
-	// -------------------------------------------------------------------------
-	// Helpers
-	// -------------------------------------------------------------------------
-
-	private List<String> buildPlayerList(String localName)
-	{
-		List<String> players = new ArrayList<>();
-		if (localName != null && !localName.isEmpty())
-		{
-			players.add(localName);
-		}
-		addIfNotBlank(players, config.rival1());
-		addIfNotBlank(players, config.rival2());
-		addIfNotBlank(players, config.rival3());
-		addIfNotBlank(players, config.rival4());
-		addIfNotBlank(players, config.rival5());
-		return players;
-	}
-
-	private static void addIfNotBlank(List<String> list, String value)
-	{
-		if (value != null && !value.isBlank())
-		{
-			list.add(value.trim());
-		}
 	}
 
 	private void notify(String message)
@@ -453,36 +319,6 @@ public class RivalryPlugin extends Plugin
 		if (config.notifyDesktop())
 		{
 			notifier.notify(message);
-		}
-	}
-
-	// -------------------------------------------------------------------------
-	// Crown persistence
-	// -------------------------------------------------------------------------
-
-	private static final String CROWN_KEY_PREFIX = "crown_";
-
-	private void persistCrown(String id, String holder)
-	{
-		configManager.setConfiguration("rivalry", CROWN_KEY_PREFIX + id, holder);
-	}
-
-	private void loadPersistedCrowns()
-	{
-		for (HiscoreSkill skill : HiscoreSkill.values())
-		{
-			loadCrown(skill.name());
-		}
-		loadCrown("TOTAL_LEVEL");
-		loadCrown("TOTAL_BOSS_KC");
-	}
-
-	private void loadCrown(String id)
-	{
-		String stored = configManager.getConfiguration("rivalry", CROWN_KEY_PREFIX + id);
-		if (stored != null && !stored.isBlank())
-		{
-			crownHolders.put(id, stored);
 		}
 	}
 }
