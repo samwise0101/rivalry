@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.function.ToIntFunction;
 import java.util.function.ToLongFunction;
 import lombok.Value;
-import net.runelite.api.SpriteID;
+import net.runelite.api.gameval.ItemID;
 import net.runelite.client.hiscore.HiscoreSkill;
 import net.runelite.client.hiscore.HiscoreSkillType;
 
@@ -90,7 +90,7 @@ public class CrownCalculator
 		if (options.isTrackSkills())
 		{
 			defs.add(new CategoryDef(TOTAL_LEVEL_ID, "Total Level", HiscoreSkillType.SKILL,
-				SpriteID.TAB_STATS, -1, true, -1,
+				net.runelite.api.gameval.SpriteID.SideIcons.STATS, -1, true, -1,
 				PlayerStats::overallXp, PlayerStats::totalLevel));
 		}
 		if (options.isTrackBosses())
@@ -254,21 +254,20 @@ public class CrownCalculator
 	/** Maps clue scroll tiers (which lack a sprite) to a representative clue-scroll item id, else -1. */
 	private static int clueItemId(HiscoreSkill skill)
 	{
-		// TODO (improvement plan §2.1): replace these literals with gameval ItemID constants.
 		switch (skill)
 		{
 			case CLUE_SCROLL_BEGINNER:
-				return 23182; // Clue scroll (beginner)
+				return ItemID.TRAIL_CLUE_BEGINNER;
 			case CLUE_SCROLL_EASY:
-				return 2677;  // Clue scroll (easy)
+				return ItemID.TRAIL_CLUE_EASY_SIMPLE001;
 			case CLUE_SCROLL_MEDIUM:
-				return 2801;  // Clue scroll (medium)
+				return ItemID.TRAIL_CLUE_MEDIUM_SEXTANT001;
 			case CLUE_SCROLL_HARD:
-				return 2722;  // Clue scroll (hard)
+				return ItemID.TRAIL_CLUE_HARD_MAP001;
 			case CLUE_SCROLL_ELITE:
-				return 12073; // Clue scroll (elite)
+				return ItemID.TRAIL_ELITE_EMOTE_EXP1;
 			case CLUE_SCROLL_MASTER:
-				return 19835; // Clue scroll (master)
+				return ItemID.TRAIL_CLUE_MASTER;
 			default:
 				return -1;
 		}
