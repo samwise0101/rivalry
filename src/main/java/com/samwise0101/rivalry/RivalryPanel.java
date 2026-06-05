@@ -41,14 +41,11 @@ public class RivalryPanel extends PluginPanel
 	private static final Color BEHIND_COLOR = ColorScheme.PROGRESS_ERROR_COLOR;     // red
 	private static final int GRID_COLUMNS = 3;
 	private static final int REACH_LIMIT = 10;
-	private static final List<String> DEMO_USERNAMES =
-		List.of("Maple Sage", "Violet Helm", "Ashen Pike", "Cinder Bow");
 
 	private final IconLoader iconLoader;
 	private final JPanel body = new JPanel();
 	private final JLabel statusLabel = new JLabel("Not refreshed yet", SwingConstants.CENTER);
 	private Runnable onRefresh;
-	private Runnable onTestMessage;
 
 	// Per-player expand state and last-open tab.
 	private final Set<String> expanded = new HashSet<>();
@@ -89,11 +86,6 @@ public class RivalryPanel extends PluginPanel
 	void setRefreshCallback(Runnable callback)
 	{
 		this.onRefresh = callback;
-	}
-
-	void setTestMessageCallback(Runnable callback)
-	{
-		this.onTestMessage = callback;
 	}
 
 	void setStatus(String message)
@@ -168,8 +160,6 @@ public class RivalryPanel extends PluginPanel
 			body.add(buildReachContent());
 		}
 
-		body.add(Box.createVerticalStrut(8));
-		body.add(buildTestMessageButton());
 		body.add(Box.createVerticalGlue());
 		body.revalidate();
 		body.repaint();
@@ -239,7 +229,6 @@ public class RivalryPanel extends PluginPanel
 	private JComponent buildPlayerRow(PlayerStanding standing, boolean isLocal)
 	{
 		final String name = standing.getName();
-		final String displayName = fakeUsernameFor(name);
 		boolean isExpanded = expanded.contains(name.toLowerCase());
 
 		JPanel row = new JPanel(new BorderLayout());
@@ -253,7 +242,7 @@ public class RivalryPanel extends PluginPanel
 		row.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
 		String arrow = isExpanded ? "▼ " : "▶ ";
-		JLabel nameLabel = new JLabel(arrow + (isLocal ? displayName + " (you)" : displayName));
+		JLabel nameLabel = new JLabel(arrow + (isLocal ? name + " (you)" : name));
 		nameLabel.setForeground(isLocal ? Color.WHITE : ColorScheme.LIGHT_GRAY_COLOR);
 		nameLabel.setFont(FontManager.getRunescapeSmallFont());
 
@@ -281,22 +270,6 @@ public class RivalryPanel extends PluginPanel
 		});
 
 		return row;
-	}
-
-	private JComponent buildTestMessageButton()
-	{
-		JButton button = new JButton("Fire Test Message");
-		button.setFont(FontManager.getRunescapeSmallFont());
-		button.setAlignmentX(LEFT_ALIGNMENT);
-		button.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
-		button.addActionListener(e ->
-		{
-			if (onTestMessage != null)
-			{
-				onTestMessage.run();
-			}
-		});
-		return button;
 	}
 
 	private JComponent buildExpandSection(PlayerStanding standing)
@@ -609,11 +582,5 @@ public class RivalryPanel extends PluginPanel
 		}
 		// diff == 0: behind on the tiebreak if a holder exists, otherwise a genuine tie.
 		return stat.isHasHolder() ? BEHIND_COLOR : ColorScheme.LIGHT_GRAY_COLOR;
-	}
-
-	private static String fakeUsernameFor(String name)
-	{
-		int index = Math.floorMod(name.toLowerCase().hashCode(), DEMO_USERNAMES.size());
-		return DEMO_USERNAMES.get(index);
 	}
 }
