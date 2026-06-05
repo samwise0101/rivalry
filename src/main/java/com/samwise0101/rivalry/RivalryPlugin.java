@@ -7,6 +7,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -42,6 +43,17 @@ public class RivalryPlugin extends Plugin
 {
 	private static final DateTimeFormatter TIME_FMT =
 		DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault());
+
+	private static final long LOGIN_REFRESH_DELAY_SECONDS = 10;
+	private static final long STARTUP_REFRESH_DELAY_SECONDS = 3;
+
+	private static final String KEY_POLL_INTERVAL = "pollIntervalMinutes";
+	// Config keys that change only how data is shown — recompute from cache, no re-fetch.
+	private static final Set<String> DISPLAY_KEYS =
+		Set.of("trackSkills", "trackBosses", "trackClues", "gapToNextPlayer");
+	// Config keys that only affect notification delivery — no recompute needed.
+	private static final Set<String> NOTIFICATION_KEYS =
+		Set.of("notifyGameChat", "notifyDesktop");
 
 	@Inject
 	private Client client;
@@ -86,6 +98,12 @@ public class RivalryPlugin extends Plugin
 	// Cached on the client thread (GameTick) so executor threads can read it safely.
 	private volatile String localPlayerName;
 
+	// Inputs from the last successful compute, so display-only changes can recompute
+	// without re-fetching. The stats map is treated as immutable once stored.
+	private volatile List<String> lastRoster;
+	private volatile Map<String, PlayerStats> lastStats;
+	private volatile String lastComputeLocalName;
+
 	private boolean seeded = false;
 
 	@Override
@@ -110,7 +128,7 @@ public class RivalryPlugin extends Plugin
 		// so kick off an initial refresh ourselves.
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
-			executor.schedule(this::refresh, 3, TimeUnit.SECONDS);
+			executor.schedule(this::refresh, STARTUP_REFRESH_DELAY_SECONDS, TimeUnit.SECONDS);
 		}
 
 		log.info("Rivalry started");
@@ -136,7 +154,7 @@ public class RivalryPlugin extends Plugin
 		if (state == GameState.LOGGED_IN)
 		{
 			// Trigger a refresh shortly after login so data is fresh
-			executor.schedule(this::refresh, 10, TimeUnit.SECONDS);
+			executor.schedule(this::refresh, LOGIN_REFRESH_DELAY_SECONDS, TimeUnit.SECONDS);
 		}
 		else if (state == GameState.LOGIN_SCREEN || state == GameState.HOPPING)
 		{
@@ -164,13 +182,26 @@ public class RivalryPlugin extends Plugin
 			return;
 		}
 
-		if ("pollIntervalMinutes".equals(event.getKey()))
+		String key = event.getKey();
+		if (KEY_POLL_INTERVAL.equals(key))
 		{
 			schedulePoll();
 		}
-
-		// Re-run the leaderboard when the roster or group settings change.
-		triggerRefresh();
+		else if (NOTIFICATION_KEYS.contains(key))
+		{
+			// Purely how we notify — nothing to recompute.
+		}
+		else if (DISPLAY_KEYS.contains(key))
+		{
+			// Category/display options don't change the fetched data, so recompute
+			// from the cached stats instead of hitting the hiscores again.
+			recomputeFromCache();
+		}
+		else
+		{
+			// Roster/group settings changed — need a fresh fetch.
+			triggerRefresh();
+		}
 	}
 
 	@Provides
@@ -196,6 +227,19 @@ public class RivalryPlugin extends Plugin
 	private void triggerRefresh()
 	{
 		executor.execute(this::refresh);
+	}
+
+	/** Recompute standings from the last fetched stats (for display-only changes), or refresh if none. */
+	private void recomputeFromCache()
+	{
+		List<String> roster = lastRoster;
+		Map<String, PlayerStats> stats = lastStats;
+		if (roster == null || stats == null)
+		{
+			triggerRefresh();
+			return;
+		}
+		executor.execute(() -> computeAndUpdate(lastComputeLocalName, roster, stats));
 	}
 
 	// -------------------------------------------------------------------------
@@ -242,6 +286,11 @@ public class RivalryPlugin extends Plugin
 
 	private void computeAndUpdate(String localName, List<String> roster, Map<String, PlayerStats> stats)
 	{
+		// Remember the inputs so display-only config changes can recompute cheaply.
+		lastRoster = roster;
+		lastStats = stats;
+		lastComputeLocalName = localName;
+
 		try
 		{
 			CrownOptions options = new CrownOptions(
