@@ -4,28 +4,16 @@ import com.google.inject.Provides;
 import java.awt.Color;
 import java.awt.TrayIcon;
 import java.awt.image.BufferedImage;
-import java.io.BufferedInputStream;
-import java.io.IOException;
-import java.io.InputStream;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import javax.sound.sampled.AudioInputStream;
-import javax.sound.sampled.AudioSystem;
-import javax.sound.sampled.Clip;
-import javax.sound.sampled.FloatControl;
-import javax.sound.sampled.LineEvent;
-import javax.sound.sampled.LineUnavailableException;
-import javax.sound.sampled.UnsupportedAudioFileException;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
@@ -33,6 +21,7 @@ import net.runelite.api.GameState;
 import net.runelite.api.Player;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.client.audio.AudioPlayer;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.FlashNotification;
@@ -90,6 +79,9 @@ public class RivalryPlugin extends Plugin
 	private Notifier notifier;
 
 	@Inject
+	private AudioPlayer audioPlayer;
+
+	@Inject
 	private ClientToolbar clientToolbar;
 
 	@Inject
@@ -113,10 +105,6 @@ public class RivalryPlugin extends Plugin
 	private RivalryPanel panel;
 	private NavigationButton navButton;
 	private ScheduledFuture<?> pollTask;
-	private final Object notificationSoundLock = new Object();
-	private final Queue<QueuedNotificationSound> notificationSoundQueue = new ArrayDeque<>();
-	private boolean notificationSoundActive;
-	private Clip currentNotificationClip;
 
 	// Cached on the client thread (GameTick) so executor threads can read it safely.
 	private volatile String localPlayerName;
@@ -168,7 +156,6 @@ public class RivalryPlugin extends Plugin
 			pollTask.cancel(false);
 			pollTask = null;
 		}
-		clearNotificationSoundQueue();
 		seeded = false;
 		log.info("Rivalry stopped");
 	}
@@ -475,109 +462,18 @@ public class RivalryPlugin extends Plugin
 			return;
 		}
 
-		boolean shouldStart;
-		synchronized (notificationSoundLock)
+		// Convert a 0-100 volume to a MASTER_GAIN value in decibels (0 dB at full volume).
+		float gain = (float) (20.0 * Math.log10(volume / 100.0));
+		executor.execute(() ->
 		{
-			notificationSoundQueue.add(new QueuedNotificationSound(resourcePath, volume));
-			shouldStart = !notificationSoundActive;
-			notificationSoundActive = true;
-		}
-
-		if (shouldStart)
-		{
-			executor.execute(this::playNextNotificationSound);
-		}
-	}
-
-	private void playNextNotificationSound()
-	{
-		QueuedNotificationSound sound;
-		synchronized (notificationSoundLock)
-		{
-			sound = notificationSoundQueue.poll();
-			if (sound == null)
+			try
 			{
-				notificationSoundActive = false;
-				currentNotificationClip = null;
-				return;
+				audioPlayer.play(getClass(), resourcePath, gain);
 			}
-		}
-
-		try (InputStream resourceStream = getClass().getResourceAsStream(sound.resourcePath))
-		{
-			if (resourceStream == null)
+			catch (Exception e)
 			{
-				log.debug("Notification sound resource not found: {}", sound.resourcePath);
-				executor.execute(this::playNextNotificationSound);
-				return;
+				log.debug("Unable to play notification sound {}", resourcePath, e);
 			}
-
-			try (AudioInputStream audioStream =
-				AudioSystem.getAudioInputStream(new BufferedInputStream(resourceStream)))
-			{
-				Clip clip = AudioSystem.getClip();
-				clip.addLineListener(event ->
-				{
-					if (event.getType() == LineEvent.Type.STOP)
-					{
-						event.getLine().close();
-						executor.execute(this::playNextNotificationSound);
-					}
-				});
-				clip.open(audioStream);
-				applyVolume(clip, sound.volume);
-				synchronized (notificationSoundLock)
-				{
-					currentNotificationClip = clip;
-				}
-				clip.start();
-			}
-		}
-		catch (IOException | LineUnavailableException | UnsupportedAudioFileException e)
-		{
-			log.debug("Unable to play notification sound {}", sound.resourcePath, e);
-			executor.execute(this::playNextNotificationSound);
-		}
-	}
-
-	private static void applyVolume(Clip clip, int volume)
-	{
-		if (!clip.isControlSupported(FloatControl.Type.MASTER_GAIN))
-		{
-			return;
-		}
-
-		FloatControl gain = (FloatControl) clip.getControl(FloatControl.Type.MASTER_GAIN);
-		float scaledGain = (float) (20.0 * Math.log10(volume / 100.0));
-		gain.setValue(Math.max(gain.getMinimum(), Math.min(gain.getMaximum(), scaledGain)));
-	}
-
-	private void clearNotificationSoundQueue()
-	{
-		Clip clip;
-		synchronized (notificationSoundLock)
-		{
-			notificationSoundQueue.clear();
-			notificationSoundActive = false;
-			clip = currentNotificationClip;
-			currentNotificationClip = null;
-		}
-
-		if (clip != null)
-		{
-			clip.close();
-		}
-	}
-
-	private static final class QueuedNotificationSound
-	{
-		private final String resourcePath;
-		private final int volume;
-
-		private QueuedNotificationSound(String resourcePath, int volume)
-		{
-			this.resourcePath = resourcePath;
-			this.volume = volume;
-		}
+		});
 	}
 }
