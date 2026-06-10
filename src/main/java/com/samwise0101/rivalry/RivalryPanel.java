@@ -35,9 +35,10 @@ import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
 
 public class RivalryPanel extends PluginPanel
 {
-	private static final Color CROWN_COLOR = new Color(255, 215, 0);
+	private static final Color CROWN_COLOR = CrownTier.GOLD.getColor();
+	private static final Color SILVER_COLOR = CrownTier.SILVER.getColor();
+	private static final Color BRONZE_COLOR = CrownTier.BRONZE.getColor();
 	private static final Color HEADER_COLOR = ColorScheme.BRAND_ORANGE;
-	private static final Color AHEAD_COLOR = ColorScheme.PROGRESS_COMPLETE_COLOR;   // green
 	private static final Color BEHIND_COLOR = ColorScheme.PROGRESS_ERROR_COLOR;     // red
 	private static final int GRID_COLUMNS = 3;
 	private static final int REACH_LIMIT = 10;
@@ -135,7 +136,14 @@ public class RivalryPanel extends PluginPanel
 			else
 			{
 				lastStandings.stream()
-					.sorted((a, b) -> b.getCrownCount() - a.getCrownCount())
+					.sorted(Comparator
+						.comparingInt(PlayerStanding::getCrownCount)
+						.thenComparingInt(PlayerStanding::getSilverCrownCount)
+						.thenComparingInt(PlayerStanding::getBronzeCrownCount)
+						.thenComparingLong(PlayerStanding::getTotalXp)
+						.thenComparingInt(PlayerStanding::getTotalLevel)
+						.reversed()
+						.thenComparing(PlayerStanding::getName, String.CASE_INSENSITIVE_ORDER))
 					.forEach(s ->
 					{
 						boolean isLocal = s.getName().equalsIgnoreCase(lastLocalPlayer);
@@ -167,21 +175,47 @@ public class RivalryPanel extends PluginPanel
 
 	private JComponent buildCrownSummary()
 	{
-		int total = lastStandings.stream().mapToInt(PlayerStanding::getCrownCount).sum();
-		int mine = lastStandings.stream()
+		PlayerStanding me = lastStandings.stream()
 			.filter(s -> s.getName().equalsIgnoreCase(lastLocalPlayer))
-			.mapToInt(PlayerStanding::getCrownCount)
 			.findFirst()
-			.orElse(0);
+			.orElse(null);
 
-		JLabel summary = new JLabel("Your Crowns: " + mine + "/" + total + " 👑", SwingConstants.CENTER);
-		summary.setFont(FontManager.getRunescapeBoldFont());
-		summary.setForeground(CROWN_COLOR);
-		summary.setHorizontalAlignment(SwingConstants.CENTER);
-		summary.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
+		int bronze = me != null ? me.getBronzeCrownCount() : 0;
+		int silver = me != null ? me.getSilverCrownCount() : 0;
+		int gold = me != null ? me.getCrownCount() : 0;
+
+		JPanel summary = new JPanel();
+		summary.setLayout(new BoxLayout(summary, BoxLayout.Y_AXIS));
+		summary.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		summary.setMaximumSize(new Dimension(Integer.MAX_VALUE, 46));
 		summary.setBorder(BorderFactory.createEmptyBorder(2, 4, 8, 4));
 		summary.setAlignmentX(LEFT_ALIGNMENT);
+
+		JLabel title = new JLabel("Your Crowns:", SwingConstants.CENTER);
+		title.setFont(FontManager.getRunescapeBoldFont());
+		title.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		title.setHorizontalAlignment(SwingConstants.CENTER);
+		title.setAlignmentX(CENTER_ALIGNMENT);
+
+		JPanel counts = new JPanel(new GridLayout(1, 3, 6, 0));
+		counts.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		counts.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+		counts.add(crownCountLabel(gold, CROWN_COLOR));
+		counts.add(crownCountLabel(silver, SILVER_COLOR));
+		counts.add(crownCountLabel(bronze, BRONZE_COLOR));
+
+		summary.add(title);
+		summary.add(counts);
 		return summary;
+	}
+
+	private static JLabel crownCountLabel(int count, Color color)
+	{
+		JLabel label = new JLabel("\u265B " + count, SwingConstants.CENTER);
+		label.setFont(FontManager.getRunescapeSmallFont());
+		label.setForeground(count > 0 ? color : ColorScheme.MEDIUM_GRAY_COLOR);
+		label.setOpaque(false);
+		return label;
 	}
 
 	private JComponent sectionHeader(String title, boolean isExpanded, Runnable onToggle)
@@ -246,14 +280,10 @@ public class RivalryPanel extends PluginPanel
 		nameLabel.setForeground(isLocal ? Color.WHITE : ColorScheme.LIGHT_GRAY_COLOR);
 		nameLabel.setFont(FontManager.getRunescapeSmallFont());
 
-		int crowns = standing.getCrownCount();
-		JLabel crownLabel = new JLabel(crowns + " 👑");
-		crownLabel.setForeground(crowns > 0 ? CROWN_COLOR : ColorScheme.MEDIUM_GRAY_COLOR);
-		crownLabel.setFont(FontManager.getRunescapeSmallFont());
-		crownLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+		JPanel crownCounts = buildLeaderboardCrownCounts(standing);
 
 		row.add(nameLabel, BorderLayout.WEST);
-		row.add(crownLabel, BorderLayout.EAST);
+		row.add(crownCounts, BorderLayout.EAST);
 
 		row.addMouseListener(new MouseAdapter()
 		{
@@ -270,6 +300,18 @@ public class RivalryPanel extends PluginPanel
 		});
 
 		return row;
+	}
+
+	private static JPanel buildLeaderboardCrownCounts(PlayerStanding standing)
+	{
+		JPanel counts = new JPanel(new GridLayout(1, 3, 4, 0));
+		counts.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		counts.setOpaque(false);
+		counts.setToolTipText("Gold / Silver / Bronze crowns");
+		counts.add(crownCountLabel(standing.getCrownCount(), CROWN_COLOR));
+		counts.add(crownCountLabel(standing.getSilverCrownCount(), SILVER_COLOR));
+		counts.add(crownCountLabel(standing.getBronzeCrownCount(), BRONZE_COLOR));
+		return counts;
 	}
 
 	private JComponent buildExpandSection(PlayerStanding standing)
@@ -311,13 +353,16 @@ public class RivalryPanel extends PluginPanel
 			.filter(c -> c.getType() == type)
 			.collect(Collectors.toList());
 
-		CategoryStat aggregate = all.stream().filter(CategoryStat::isAggregate).findFirst().orElse(null);
+		List<CategoryStat> aggregates = all.stream()
+			.filter(CategoryStat::isAggregate)
+			.sorted(Comparator.comparingInt(CategoryStat::getOrder))
+			.collect(Collectors.toList());
 		List<CategoryStat> regular = all.stream()
 			.filter(c -> !c.isAggregate())
 			.sorted(Comparator.comparingInt(CategoryStat::getOrder))
 			.collect(Collectors.toList());
 
-		if (aggregate == null && regular.isEmpty())
+		if (aggregates.isEmpty() && regular.isEmpty())
 		{
 			return emptyTabPanel("Nothing ranked");
 		}
@@ -340,8 +385,8 @@ public class RivalryPanel extends PluginPanel
 			container.add(grid);
 		}
 
-		// Aggregate (e.g. Total Level) gets its own centered full-width row below the grid.
-		if (aggregate != null)
+		// Aggregates (e.g. Total Level) each get a centered full-width row below the grid.
+		for (CategoryStat aggregate : aggregates)
 		{
 			container.add(buildTotalRow(aggregate));
 		}
@@ -560,21 +605,67 @@ public class RivalryPanel extends PluginPanel
 
 		String unit = unitFor(stat);
 		String gap = String.format("%,d %s", Math.abs(crownDiff), unit);
-		String detail;
 		if (stat.isHoldsCrown())
 		{
-			detail = "You lead by " + gap + ".";
-		}
-		else if (stat.isComparesToNextPlayer())
-		{
-			detail = gap + " behind next player.";
-		}
-		else
-		{
-			detail = gap + " behind crown holder.";
+			return "<html>" + stat.getName() + "<br>Leading by " + gap + ".</html>";
 		}
 
+		if (!stat.getComparisons().isEmpty())
+		{
+			StringBuilder tooltip = new StringBuilder("<html>").append(stat.getName());
+			for (CategoryComparison comparison : stat.getComparisons())
+			{
+				tooltip.append("<br>")
+					.append(formatGap(comparison.getCrownDiff(), unit))
+					.append(" behind ")
+					.append(formatPlayerNames(comparison.getPlayerNames()));
+				if (comparison.getCrownTier() != null)
+				{
+					tooltip.append(" (").append(tierLabel(comparison.getCrownTier())).append(" Crown)");
+				}
+			}
+			return tooltip.append("</html>").toString();
+		}
+
+		String detail = stat.isComparesToNextPlayer()
+			? gap + " behind next player."
+			: gap + " behind crown holder.";
 		return "<html>" + stat.getName() + "<br>" + detail + "</html>";
+	}
+
+	private static String formatGap(Long crownDiff, String unit)
+	{
+		return String.format("%,d%s", Math.abs(crownDiff), unit);
+	}
+
+	private static String formatPlayerNames(String names)
+	{
+		String[] parts = names.split("\\|");
+		if (parts.length == 1)
+		{
+			return parts[0];
+		}
+		if (parts.length == 2)
+		{
+			return parts[0] + " and " + parts[1];
+		}
+
+		StringBuilder formatted = new StringBuilder();
+		for (int i = 0; i < parts.length; i++)
+		{
+			if (i > 0)
+			{
+				formatted.append(i == parts.length - 1 ? ", and " : ", ");
+			}
+			formatted.append(parts[i]);
+		}
+		return formatted.toString();
+	}
+
+	private static String tierLabel(CrownTier tier)
+	{
+		String lower = tier.name().toLowerCase();
+		return Character.toUpperCase(lower.charAt(0)) + lower.substring(1);
 	}
 
 	private static String unitFor(CategoryStat stat)
@@ -612,15 +703,11 @@ public class RivalryPanel extends PluginPanel
 		{
 			return ColorScheme.LIGHT_GRAY_COLOR;
 		}
-		if (stat.isHoldsCrown())
+		CrownTier tier = stat.getCrownTier();
+		if (tier != null)
 		{
-			return AHEAD_COLOR;
+			return tier.getColor();
 		}
-		if (diff < 0)
-		{
-			return BEHIND_COLOR;
-		}
-		// diff == 0: behind on the tiebreak if a holder exists, otherwise a genuine tie.
-		return stat.isHasHolder() ? BEHIND_COLOR : ColorScheme.LIGHT_GRAY_COLOR;
+		return BEHIND_COLOR;
 	}
 }

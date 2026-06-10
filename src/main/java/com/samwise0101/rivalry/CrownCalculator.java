@@ -2,6 +2,7 @@ package com.samwise0101.rivalry;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +21,7 @@ import net.runelite.client.hiscore.HiscoreSkillType;
 public class CrownCalculator
 {
 	static final String TOTAL_LEVEL_ID = "TOTAL_LEVEL";
+	static final String TOTAL_XP_ID = "TOTAL_XP";
 	static final String TOTAL_BOSS_KC_ID = "TOTAL_BOSS_KC";
 
 	// Skills in the order they appear in the in-game skills tab (3 columns, row by row).
@@ -41,25 +43,39 @@ public class CrownCalculator
 	public CrownResult calculate(List<String> roster, Map<String, PlayerStats> stats, CrownOptions options)
 	{
 		Map<String, List<CategoryStat>> statsByPlayer = new HashMap<>();
-		Map<String, Integer> crownCount = new HashMap<>();
+		Map<String, Integer> goldCrownCount = new HashMap<>();
+		Map<String, Integer> silverCrownCount = new HashMap<>();
+		Map<String, Integer> bronzeCrownCount = new HashMap<>();
 		for (String p : roster)
 		{
 			statsByPlayer.put(p, new ArrayList<>());
-			crownCount.put(p, 0);
+			goldCrownCount.put(p, 0);
+			silverCrownCount.put(p, 0);
+			bronzeCrownCount.put(p, 0);
 		}
 
 		Map<String, String> holders = new HashMap<>();
+		Map<CrownTier, Map<String, String>> tierHoldersByCategory = new HashMap<>();
+		for (CrownTier tier : CrownTier.values())
+		{
+			tierHoldersByCategory.put(tier, new HashMap<>());
+		}
 		for (CategoryDef def : categories(options))
 		{
-			processCategory(def, roster, stats, options, statsByPlayer, crownCount, holders);
+			processCategory(def, roster, stats, options, statsByPlayer,
+				goldCrownCount, silverCrownCount, bronzeCrownCount, holders, tierHoldersByCategory);
 		}
 
 		List<PlayerStanding> standings = new ArrayList<>();
 		for (String p : roster)
 		{
-			standings.add(new PlayerStanding(p, crownCount.get(p), statsByPlayer.get(p)));
+			PlayerStats playerStats = stats.get(p.toLowerCase());
+			long totalXp = playerStats != null ? playerStats.overallXp() : -1;
+			int totalLevel = playerStats != null ? playerStats.totalLevel() : -1;
+			standings.add(new PlayerStanding(p, goldCrownCount.get(p), silverCrownCount.get(p),
+				bronzeCrownCount.get(p), totalXp, totalLevel, statsByPlayer.get(p)));
 		}
-		return new CrownResult(standings, holders);
+		return new CrownResult(standings, holders, tierHoldersByCategory);
 	}
 
 	/** Human-readable name for a category id (used for notifications etc.). */
@@ -68,6 +84,10 @@ public class CrownCalculator
 		if (TOTAL_LEVEL_ID.equals(id))
 		{
 			return "Total Level";
+		}
+		if (TOTAL_XP_ID.equals(id))
+		{
+			return "Total XP";
 		}
 		if (TOTAL_BOSS_KC_ID.equals(id))
 		{
@@ -92,6 +112,9 @@ public class CrownCalculator
 			defs.add(new CategoryDef(TOTAL_LEVEL_ID, "Total Level", HiscoreSkillType.SKILL,
 				net.runelite.api.gameval.SpriteID.SideIcons.STATS, -1, true, -1,
 				PlayerStats::overallXp, PlayerStats::totalLevel));
+			defs.add(new CategoryDef(TOTAL_XP_ID, "Total XP", HiscoreSkillType.SKILL,
+				net.runelite.api.gameval.SpriteID.SideIcons.STATS, -1, true, 0,
+				PlayerStats::overallXp, s -> safeLongToInt(s.overallXp())));
 		}
 		if (options.isTrackBosses())
 		{
@@ -117,13 +140,13 @@ public class CrownCalculator
 
 	private void processCategory(CategoryDef def, List<String> roster, Map<String, PlayerStats> stats,
 		CrownOptions options, Map<String, List<CategoryStat>> statsByPlayer,
-		Map<String, Integer> crownCount, Map<String, String> holders)
+		Map<String, Integer> goldCrownCount, Map<String, Integer> silverCrownCount,
+		Map<String, Integer> bronzeCrownCount, Map<String, String> holders,
+		Map<CrownTier, Map<String, String>> tierHoldersByCategory)
 	{
-		// Pass 1: find the leading crown value, count ties, gather per-player values.
+		// Pass 1: find the leading crown value and gather per-player values.
 		long best = -1;
-		int topCount = 0;
 		int topDisplay = -1;
-		String topPlayer = null;
 		Map<String, Integer> displays = new HashMap<>();
 		Map<String, Long> crownValues = new HashMap<>();
 		for (String name : roster)
@@ -141,13 +164,7 @@ public class CrownCalculator
 			if (crownVal > best)
 			{
 				best = crownVal;
-				topCount = 1;
-				topPlayer = name;
 				topDisplay = displayVal;
-			}
-			else if (crownVal == best)
-			{
-				topCount++;
 			}
 		}
 
@@ -156,25 +173,37 @@ public class CrownCalculator
 			return; // nobody ranked
 		}
 
-		// A crown is only held when a single player strictly leads; a tie is contested.
-		String holder = topCount == 1 ? topPlayer : null;
+		Map<CrownTier, List<String>> tierHolders = crownTierHolders(roster, crownValues);
+		List<String> goldHolders = tierHolders.getOrDefault(CrownTier.GOLD, Collections.emptyList());
+		String holder = holderString(goldHolders);
 		holders.put(def.id, holder);
-		if (holder != null)
+		for (CrownTier tier : CrownTier.values())
 		{
-			crownCount.merge(holder, 1, Integer::sum);
+			tierHoldersByCategory.get(tier).put(def.id,
+				holderString(tierHolders.getOrDefault(tier, Collections.emptyList())));
 		}
+		mergeTierHolders(goldCrownCount, goldHolders);
+		mergeTierHolders(silverCrownCount, tierHolders.get(CrownTier.SILVER));
+		mergeTierHolders(bronzeCrownCount, tierHolders.get(CrownTier.BRONZE));
 
-		// Best display/crown value among players other than the holder (for the holder's margin).
+		// Best display/crown value among players not holding gold (for gold holder margins).
 		int runnerUp = 0;
 		long runnerUpCrown = 0;
+		boolean runnerUpFound = false;
 		for (String name : roster)
 		{
-			if (holder != null && name.equals(holder))
+			if (goldHolders.stream().anyMatch(name::equalsIgnoreCase))
 			{
 				continue;
 			}
 			runnerUp = Math.max(runnerUp, displays.get(name));
 			runnerUpCrown = Math.max(runnerUpCrown, crownValues.get(name));
+			runnerUpFound = true;
+		}
+		if (!runnerUpFound)
+		{
+			runnerUp = topDisplay;
+			runnerUpCrown = best;
 		}
 
 		for (String p : roster)
@@ -188,10 +217,31 @@ public class CrownCalculator
 				continue;
 			}
 
-			boolean holds = holder != null && p.equalsIgnoreCase(holder);
+			CrownTier tier = tierForPlayer(tierHolders, p);
+			boolean holds = tier == CrownTier.GOLD;
 			Integer diff;
 			Long crownDiff;
 			boolean comparesToNextPlayer = false;
+			String comparisonPlayerName = null;
+			List<CategoryComparison> comparisons = Collections.emptyList();
+			long aboveCrown = Long.MAX_VALUE;
+			int aboveDisplay = displayVal;
+			boolean foundAbove = false;
+			if (displayVal >= 0 && !holds)
+			{
+				for (String q : roster)
+				{
+					long qc = crownValues.get(q);
+					if (qc >= 0 && qc > crownVal && qc < aboveCrown)
+					{
+						aboveCrown = qc;
+						aboveDisplay = displays.get(q);
+						foundAbove = true;
+					}
+				}
+				comparisons = comparisonsFor(roster, crownValues, tierHolders, crownVal, best, holder, foundAbove, aboveCrown);
+			}
+
 			if (displayVal < 0)
 			{
 				diff = null;
@@ -204,32 +254,139 @@ public class CrownCalculator
 			}
 			else if (options.isGapToNextPlayer())
 			{
-				long aboveCrown = Long.MAX_VALUE;
-				int aboveDisplay = displayVal;
-				boolean found = false;
-				for (String q : roster)
-				{
-					long qc = crownValues.get(q);
-					if (qc >= 0 && qc > crownVal && qc < aboveCrown)
-					{
-						aboveCrown = qc;
-						aboveDisplay = displays.get(q);
-						found = true;
-					}
-				}
-				diff = found ? displayVal - aboveDisplay : 0;
-				crownDiff = found ? crownVal - aboveCrown : 0L;
-				comparesToNextPlayer = found && aboveCrown < best;
+				diff = foundAbove ? displayVal - aboveDisplay : 0;
+				crownDiff = foundAbove ? crownVal - aboveCrown : 0L;
+				comparesToNextPlayer = foundAbove && aboveCrown < best;
+				comparisonPlayerName = foundAbove ? holderString(playersWithValue(roster, crownValues, aboveCrown)) : null;
 			}
 			else
 			{
 				diff = displayVal - topDisplay;
 				crownDiff = crownVal - best;
+				comparisonPlayerName = holder;
 			}
 
 			statsByPlayer.get(p).add(new CategoryStat(def.displayName, def.spriteId, def.itemId,
-				def.type, diff, crownDiff, holds, holder != null, comparesToNextPlayer, def.aggregate, def.order));
+				def.type, diff, crownDiff, holds, tier, holder != null, comparesToNextPlayer,
+				comparisonPlayerName, comparisons, def.aggregate, def.order));
 		}
+	}
+
+	private static void mergeTierHolders(Map<String, Integer> counts, List<String> holders)
+	{
+		if (holders == null)
+		{
+			return;
+		}
+		for (String holder : holders)
+		{
+			counts.merge(holder, 1, Integer::sum);
+		}
+	}
+
+	private static CrownTier tierForPlayer(Map<CrownTier, List<String>> tierHolders, String player)
+	{
+		for (Map.Entry<CrownTier, List<String>> entry : tierHolders.entrySet())
+		{
+			if (entry.getValue().stream().anyMatch(player::equalsIgnoreCase))
+			{
+				return entry.getKey();
+			}
+		}
+		return null;
+	}
+
+	private static Map<CrownTier, List<String>> crownTierHolders(List<String> roster, Map<String, Long> crownValues)
+	{
+		Map<CrownTier, List<String>> tierHolders = new HashMap<>();
+		List<Long> rankedValues = new ArrayList<>();
+		for (long value : crownValues.values())
+		{
+			if (value > 0 && !rankedValues.contains(value))
+			{
+				rankedValues.add(value);
+			}
+		}
+		rankedValues.sort((a, b) -> Long.compare(b, a));
+
+		CrownTier[] tiers = CrownTier.values();
+		for (int i = 0; i < rankedValues.size() && i < tiers.length; i++)
+		{
+			long rankedValue = rankedValues.get(i);
+			List<String> holders = new ArrayList<>();
+			for (String player : roster)
+			{
+				if (crownValues.get(player) == rankedValue)
+				{
+					holders.add(player);
+				}
+			}
+			if (!holders.isEmpty())
+			{
+				tierHolders.put(tiers[i], holders);
+			}
+		}
+		return tierHolders;
+	}
+
+	private static String holderString(List<String> holders)
+	{
+		if (holders.isEmpty())
+		{
+			return null;
+		}
+		return String.join("|", holders);
+	}
+
+	private static List<String> playersWithValue(List<String> roster, Map<String, Long> crownValues, long value)
+	{
+		List<String> players = new ArrayList<>();
+		for (String player : roster)
+		{
+			if (crownValues.get(player) == value)
+			{
+				players.add(player);
+			}
+		}
+		return players;
+	}
+
+	private static List<CategoryComparison> comparisonsFor(List<String> roster, Map<String, Long> crownValues,
+		Map<CrownTier, List<String>> tierHolders, long crownVal, long best, String holder,
+		boolean foundAbove, long aboveCrown)
+	{
+		List<CategoryComparison> comparisons = new ArrayList<>();
+		if (holder != null && crownVal < best)
+		{
+			comparisons.add(new CategoryComparison(holder, CrownTier.GOLD, crownVal - best));
+		}
+		if (foundAbove && aboveCrown < best)
+		{
+			List<String> players = playersWithValue(roster, crownValues, aboveCrown);
+			comparisons.add(new CategoryComparison(holderString(players), tierForValue(tierHolders, players),
+				crownVal - aboveCrown));
+		}
+		return comparisons;
+	}
+
+	private static CrownTier tierForValue(Map<CrownTier, List<String>> tierHolders, List<String> players)
+	{
+		if (players.isEmpty())
+		{
+			return null;
+		}
+		for (CrownTier tier : CrownTier.values())
+		{
+			List<String> holders = tierHolders.getOrDefault(tier, Collections.emptyList());
+			for (String player : players)
+			{
+				if (holders.stream().anyMatch(player::equalsIgnoreCase))
+				{
+					return tier;
+				}
+			}
+		}
+		return null;
 	}
 
 	private static boolean typeEnabled(HiscoreSkillType type, CrownOptions options)
@@ -245,6 +402,15 @@ public class CrownCalculator
 			default:
 				return false;
 		}
+	}
+
+	private static int safeLongToInt(long value)
+	{
+		if (value < 0)
+		{
+			return -1;
+		}
+		return value > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) value;
 	}
 
 	private static int skillOrder(HiscoreSkill skill)

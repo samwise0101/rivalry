@@ -11,6 +11,10 @@ public class PlayerStanding
 {
 	String name;
 	int crownCount;
+	int silverCrownCount;
+	int bronzeCrownCount;
+	long totalXp;
+	int totalLevel;
 
 	/** All categories relevant to this player (skills always; bosses/activities only if ranked). */
 	List<CategoryStat> stats;
