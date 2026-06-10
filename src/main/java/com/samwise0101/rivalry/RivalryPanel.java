@@ -545,9 +545,49 @@ public class RivalryPanel extends PluginPanel
 		cell.setIconTextGap(2);
 		// Centre the icon+value within each (full-width) grid cell so columns are even.
 		cell.setHorizontalAlignment(SwingConstants.CENTER);
-		cell.setToolTipText(stat.getName() + (stat.isHoldsCrown() ? "  (crown)" : ""));
+		cell.setToolTipText(tooltipFor(stat));
 		iconLoader.apply(cell, stat);
 		return cell;
+	}
+
+	private static String tooltipFor(CategoryStat stat)
+	{
+		Long crownDiff = stat.getCrownDiff();
+		if (crownDiff == null)
+		{
+			return stat.getName();
+		}
+
+		String unit = unitFor(stat);
+		String gap = String.format("%,d %s", Math.abs(crownDiff), unit);
+		String detail;
+		if (stat.isHoldsCrown())
+		{
+			detail = "You lead by " + gap + ".";
+		}
+		else if (stat.isComparesToNextPlayer())
+		{
+			detail = gap + " behind next player.";
+		}
+		else
+		{
+			detail = gap + " behind crown holder.";
+		}
+
+		return "<html>" + stat.getName() + "<br>" + detail + "</html>";
+	}
+
+	private static String unitFor(CategoryStat stat)
+	{
+		switch (stat.getType())
+		{
+			case SKILL:
+				return "XP";
+			case BOSS:
+				return "KC";
+			default:
+				return "score";
+		}
 	}
 
 	private static String formatValue(CategoryStat stat)

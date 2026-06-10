@@ -191,6 +191,7 @@ public class CrownCalculator
 			boolean holds = holder != null && p.equalsIgnoreCase(holder);
 			Integer diff;
 			Long crownDiff;
+			boolean comparesToNextPlayer = false;
 			if (displayVal < 0)
 			{
 				diff = null;
@@ -218,6 +219,7 @@ public class CrownCalculator
 				}
 				diff = found ? displayVal - aboveDisplay : 0;
 				crownDiff = found ? crownVal - aboveCrown : 0L;
+				comparesToNextPlayer = found && aboveCrown < best;
 			}
 			else
 			{
@@ -226,7 +228,7 @@ public class CrownCalculator
 			}
 
 			statsByPlayer.get(p).add(new CategoryStat(def.displayName, def.spriteId, def.itemId,
-				def.type, diff, crownDiff, holds, holder != null, def.aggregate, def.order));
+				def.type, diff, crownDiff, holds, holder != null, comparesToNextPlayer, def.aggregate, def.order));
 		}
 	}
 

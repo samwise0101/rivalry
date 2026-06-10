@@ -353,6 +353,9 @@ public class RivalryPlugin extends Plugin
 
 	private void computeAndUpdate(String localName, List<String> roster, Map<String, PlayerStats> stats)
 	{
+		List<String> previousRoster = lastRoster;
+		boolean rosterChanged = previousRoster != null && !sameRoster(previousRoster, roster);
+
 		// Remember the inputs so display-only config changes can recompute cheaply.
 		lastRoster = roster;
 		lastStats = stats;
@@ -364,7 +367,7 @@ public class RivalryPlugin extends Plugin
 				config.trackSkills(), config.trackBosses(), config.trackClues(), config.gapToNextPlayer());
 			CrownResult result = crownCalculator.calculate(roster, stats, options);
 
-			applyHolderChanges(localName, result.getHolders());
+			applyHolderChanges(localName, result.getHolders(), rosterChanged);
 
 			String timestamp = TIME_FMT.format(Instant.now());
 			panel.updateStandings(result.getStandings(), localName != null ? localName : "", timestamp);
@@ -382,7 +385,7 @@ public class RivalryPlugin extends Plugin
 	 * Compares the freshly-computed crown holders against the stored ones, firing
 	 * gain/loss notifications for the local player and persisting the new holders.
 	 */
-	private void applyHolderChanges(String localName, Map<String, String> newHolders)
+	private void applyHolderChanges(String localName, Map<String, String> newHolders, boolean suppressNotifications)
 	{
 		for (Map.Entry<String, String> entry : newHolders.entrySet())
 		{
@@ -390,7 +393,7 @@ public class RivalryPlugin extends Plugin
 			String newHolder = entry.getValue();
 			String prevHolder = crownStore.getHolder(id);
 
-			if (seeded && !sameHolder(newHolder, prevHolder))
+			if (seeded && !suppressNotifications && !sameHolder(newHolder, prevHolder))
 			{
 				boolean localHeld = localName != null && localName.equalsIgnoreCase(prevHolder);
 				boolean localGained = localName != null && localName.equalsIgnoreCase(newHolder);
@@ -412,6 +415,26 @@ public class RivalryPlugin extends Plugin
 		}
 
 		seeded = true;
+	}
+
+	private static boolean sameRoster(List<String> a, List<String> b)
+	{
+		if (a.size() != b.size())
+		{
+			return false;
+		}
+
+		for (int i = 0; i < a.size(); i++)
+		{
+			String left = a.get(i);
+			String right = b.get(i);
+			if (left == null ? right != null : !left.equalsIgnoreCase(right))
+			{
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	private static boolean sameHolder(String a, String b)

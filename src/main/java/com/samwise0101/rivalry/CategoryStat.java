@@ -39,6 +39,9 @@ public class CategoryStat
 	/** True if some player strictly leads the category (the crown is not contested). */
 	boolean hasHolder;
 
+	/** True when the displayed gap is to the next player above, not the crown holder. */
+	boolean comparesToNextPlayer;
+
 	/** True for aggregate categories (Total Level, Total Boss KC) — shown in their own row. */
 	boolean aggregate;
 
