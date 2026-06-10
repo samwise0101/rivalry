@@ -10,3 +10,4 @@ nbproject/
 
 # Local planning docs (not part of the published plugin)
 IMPROVEMENT_PLAN.md
+.claude/
