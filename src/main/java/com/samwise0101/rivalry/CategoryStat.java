@@ -1,5 +1,6 @@
 package com.samwise0101.rivalry;
 
+import java.util.List;
 import lombok.Value;
 import net.runelite.client.hiscore.HiscoreSkillType;
 
@@ -36,11 +37,20 @@ public class CategoryStat
 	/** True if this player currently leads the category (holds the crown). */
 	boolean holdsCrown;
 
+	/** The crown tier this player holds in this category, or null if none. */
+	CrownTier crownTier;
+
 	/** True if some player strictly leads the category (the crown is not contested). */
 	boolean hasHolder;
 
 	/** True when the displayed gap is to the next player above, not the crown holder. */
 	boolean comparesToNextPlayer;
+
+	/** Player name(s) this stat is compared against, or null when not applicable. */
+	String comparisonPlayerName;
+
+	/** Tooltip comparison rows, usually crown holder and next player above. */
+	List<CategoryComparison> comparisons;
 
 	/** True for aggregate categories (Total Level, Total Boss KC) — shown in their own row. */
 	boolean aggregate;

@@ -148,6 +148,7 @@ Wise Old Man is used only to find group members. Hiscore comparison still uses t
 ## Maintainers
 
 Technical documentation lives in [docs/](docs/OVERVIEW.md).
+Release notes live in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

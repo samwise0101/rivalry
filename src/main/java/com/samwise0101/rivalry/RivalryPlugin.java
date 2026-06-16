@@ -7,6 +7,10 @@ import java.awt.image.BufferedImage;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -19,8 +23,10 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Player;
+import net.runelite.api.Skill;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.StatChanged;
 import net.runelite.client.audio.AudioPlayer;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.config.ConfigManager;
@@ -31,6 +37,8 @@ import net.runelite.client.config.RequestFocusType;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.hiscore.HiscoreSkill;
+import net.runelite.client.hiscore.HiscoreSkillType;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.util.ImageUtil;
@@ -51,6 +59,7 @@ public class RivalryPlugin extends Plugin
 	private static final long STARTUP_REFRESH_DELAY_SECONDS = 3;
 	private static final String SUCCESS_SOUND = "/success.wav";
 	private static final String FAILURE_SOUND = "/failure.wav";
+	private static final int AGGREGATE_CROWN_NOTIFICATION_THRESHOLD = 3;
 
 	private static final String KEY_POLL_INTERVAL = "pollIntervalMinutes";
 	// Config keys that change only how data is shown — recompute from cache, no re-fetch.
@@ -114,6 +123,7 @@ public class RivalryPlugin extends Plugin
 	private volatile List<String> lastRoster;
 	private volatile Map<String, PlayerStats> lastStats;
 	private volatile String lastComputeLocalName;
+	private volatile LocalStatValues latestLocalStatValues;
 
 	private boolean seeded = false;
 
@@ -172,6 +182,7 @@ public class RivalryPlugin extends Plugin
 		else if (state == GameState.LOGIN_SCREEN || state == GameState.HOPPING)
 		{
 			localPlayerName = null;
+			latestLocalStatValues = null;
 		}
 	}
 
@@ -185,6 +196,29 @@ public class RivalryPlugin extends Plugin
 		{
 			localPlayerName = name;
 		}
+	}
+
+	@Subscribe
+	public void onStatChanged(StatChanged event)
+	{
+		HiscoreSkill hiscoreSkill = hiscoreSkillFor(event.getSkill());
+		if (hiscoreSkill == null)
+		{
+			return;
+		}
+
+		String localName = localPlayerName;
+		List<String> roster = lastRoster;
+		Map<String, PlayerStats> stats = lastStats;
+		if (localName == null || roster == null || stats == null || !containsPlayer(roster, localName))
+		{
+			return;
+		}
+
+		LocalStatValues localValues = captureLocalStatValues();
+		latestLocalStatValues = localValues;
+		Map<String, PlayerStats> updatedStats = withLocalStats(localName, stats, localValues);
+		executor.execute(() -> computeAndUpdate(localName, roster, updatedStats));
 	}
 
 	@Subscribe
@@ -309,6 +343,55 @@ public class RivalryPlugin extends Plugin
 		executor.execute(() -> computeAndUpdate(lastComputeLocalName, roster, stats));
 	}
 
+	private LocalStatValues captureLocalStatValues()
+	{
+		Map<HiscoreSkill, Long> skillXp = new EnumMap<>(HiscoreSkill.class);
+		Map<HiscoreSkill, Integer> skillLevels = new EnumMap<>(HiscoreSkill.class);
+		for (Skill skill : Skill.values())
+		{
+			HiscoreSkill hiscoreSkill = hiscoreSkillFor(skill);
+			if (hiscoreSkill == null)
+			{
+				continue;
+			}
+			skillXp.put(hiscoreSkill, (long) client.getSkillExperience(skill));
+			skillLevels.put(hiscoreSkill, client.getRealSkillLevel(skill));
+		}
+		return new LocalStatValues(skillXp, skillLevels, client.getOverallExperience(), client.getTotalLevel());
+	}
+
+	private static HiscoreSkill hiscoreSkillFor(Skill skill)
+	{
+		if (skill == Skill.OVERALL)
+		{
+			return null;
+		}
+		try
+		{
+			HiscoreSkill hiscoreSkill = HiscoreSkill.valueOf(skill.name());
+			return hiscoreSkill.getType() == HiscoreSkillType.SKILL ? hiscoreSkill : null;
+		}
+		catch (IllegalArgumentException e)
+		{
+			return null;
+		}
+	}
+
+	private static boolean containsPlayer(List<String> roster, String player)
+	{
+		return roster.stream().anyMatch(p -> p.equalsIgnoreCase(player));
+	}
+
+	private static Map<String, PlayerStats> withLocalStats(String localName, Map<String, PlayerStats> stats,
+		LocalStatValues localValues)
+	{
+		Map<String, PlayerStats> updated = new HashMap<>(stats);
+		String key = localName.toLowerCase();
+		updated.put(key, new LocalPlayerStats(updated.get(key), localValues.skillXp, localValues.skillLevels,
+			localValues.overallXp, localValues.totalLevel));
+		return updated;
+	}
+
 	// -------------------------------------------------------------------------
 	// Core refresh logic
 	// -------------------------------------------------------------------------
@@ -353,8 +436,16 @@ public class RivalryPlugin extends Plugin
 
 	private void computeAndUpdate(String localName, List<String> roster, Map<String, PlayerStats> stats)
 	{
+		LocalStatValues localValues = latestLocalStatValues;
+		if (localName != null && localValues != null && containsPlayer(roster, localName))
+		{
+			stats = withLocalStats(localName, stats, localValues);
+		}
+
 		List<String> previousRoster = lastRoster;
-		boolean rosterChanged = previousRoster != null && !sameRoster(previousRoster, roster);
+		String previousLocalName = lastComputeLocalName;
+		boolean suppressNotifications = shouldSuppressHolderNotifications(previousLocalName, localName, previousRoster,
+			roster);
 
 		// Remember the inputs so display-only config changes can recompute cheaply.
 		lastRoster = roster;
@@ -367,7 +458,7 @@ public class RivalryPlugin extends Plugin
 				config.trackSkills(), config.trackBosses(), config.trackClues(), config.gapToNextPlayer());
 			CrownResult result = crownCalculator.calculate(roster, stats, options);
 
-			applyHolderChanges(localName, result.getHolders(), rosterChanged);
+			applyHolderChanges(localName, result.getTierHolders(), suppressNotifications);
 
 			String timestamp = TIME_FMT.format(Instant.now());
 			panel.updateStandings(result.getStandings(), localName != null ? localName : "", timestamp);
@@ -385,36 +476,157 @@ public class RivalryPlugin extends Plugin
 	 * Compares the freshly-computed crown holders against the stored ones, firing
 	 * gain/loss notifications for the local player and persisting the new holders.
 	 */
-	private void applyHolderChanges(String localName, Map<String, String> newHolders, boolean suppressNotifications)
+	private void applyHolderChanges(String localName, Map<CrownTier, Map<String, String>> newHoldersByTier,
+		boolean suppressNotifications)
 	{
-		for (Map.Entry<String, String> entry : newHolders.entrySet())
+		Map<CrownTier, Map<String, String>> previousHoldersByTier = new EnumMap<>(CrownTier.class);
+		for (CrownTier tier : CrownTier.values())
 		{
-			String id = entry.getKey();
-			String newHolder = entry.getValue();
-			String prevHolder = crownStore.getHolder(id);
-
-			if (seeded && !suppressNotifications && !sameHolder(newHolder, prevHolder))
-			{
-				boolean localHeld = localName != null && localName.equalsIgnoreCase(prevHolder);
-				boolean localGained = localName != null && localName.equalsIgnoreCase(newHolder);
-				String name = CrownCalculator.categoryDisplayName(id);
-
-				if (localGained)
-				{
-					notify("You claimed the " + name + " crown!", SUCCESS_SOUND);
-				}
-				else if (localHeld)
-				{
-					notify(newHolder != null
-						? "You lost the " + name + " crown to " + newHolder + "!"
-						: "You lost the " + name + " crown!", FAILURE_SOUND);
-				}
-			}
-
-			crownStore.setHolder(id, newHolder);
+			previousHoldersByTier.put(tier, new HashMap<>());
 		}
 
+		for (CrownTier tier : CrownTier.values())
+		{
+			Map<String, String> newHolders = newHoldersByTier.get(tier);
+			if (newHolders == null)
+			{
+				continue;
+			}
+			for (Map.Entry<String, String> entry : newHolders.entrySet())
+			{
+				String id = entry.getKey();
+				String newHolder = entry.getValue();
+				String prevHolder = crownStore.getHolder(tier, id);
+				previousHoldersByTier.get(tier).put(id, prevHolder);
+
+				crownStore.setHolder(tier, id, newHolder);
+			}
+		}
+
+		if (seeded && !suppressNotifications)
+		{
+			sendCrownNotificationChanges(crownNotificationChanges(localName, previousHoldersByTier,
+				newHoldersByTier));
+		}
 		seeded = true;
+	}
+
+	static List<CrownNotificationChange> crownNotificationChanges(String localName,
+		Map<CrownTier, Map<String, String>> previousHoldersByTier,
+		Map<CrownTier, Map<String, String>> newHoldersByTier)
+	{
+		List<CrownNotificationChange> notificationChanges = new ArrayList<>();
+		if (localName == null)
+		{
+			return notificationChanges;
+		}
+
+		for (CrownTier tier : CrownTier.values())
+		{
+			Map<String, String> newHolders = newHoldersByTier.get(tier);
+			if (newHolders == null)
+			{
+				continue;
+			}
+			Map<String, String> previousHolders = previousHoldersByTier.get(tier);
+			for (Map.Entry<String, String> entry : newHolders.entrySet())
+			{
+				String id = entry.getKey();
+				String newHolder = entry.getValue();
+				String prevHolder = previousHolders != null ? previousHolders.get(id) : null;
+				if (sameHolder(newHolder, prevHolder))
+				{
+					continue;
+				}
+
+				boolean localHeld = holderContains(prevHolder, localName);
+				boolean localGained = holderContains(newHolder, localName);
+				String name = CrownCalculator.categoryDisplayName(id);
+				if (localGained && !localHeld)
+				{
+					notificationChanges.add(CrownNotificationChange.gained(
+						"You gained the " + tierName(tier) + " crown for " + name + "!"));
+				}
+				else if (localHeld && !localGained)
+				{
+					notificationChanges.add(CrownNotificationChange.lost(newHolder != null
+						? "You lost the " + tierName(tier) + " crown for " + name
+							+ " to " + holderDisplayName(newHolder) + "!"
+						: "You lost the " + tierName(tier) + " crown for " + name + "!"));
+				}
+			}
+		}
+
+		return notificationChanges;
+	}
+
+	private void sendCrownNotificationChanges(List<CrownNotificationChange> changes)
+	{
+		if (changes.size() > AGGREGATE_CROWN_NOTIFICATION_THRESHOLD)
+		{
+			int gained = 0;
+			int lost = 0;
+			for (CrownNotificationChange change : changes)
+			{
+				if (change.gained)
+				{
+					gained++;
+				}
+				else
+				{
+					lost++;
+				}
+			}
+			notify(aggregateCrownNotificationMessage(gained, lost), gained > 0 ? SUCCESS_SOUND : FAILURE_SOUND);
+			return;
+		}
+
+		for (CrownNotificationChange change : changes)
+		{
+			notify(change.message, change.gained ? SUCCESS_SOUND : FAILURE_SOUND);
+		}
+	}
+
+	static List<String> crownNotificationMessages(List<CrownNotificationChange> changes)
+	{
+		List<String> messages = new ArrayList<>();
+		if (changes.size() > AGGREGATE_CROWN_NOTIFICATION_THRESHOLD)
+		{
+			int gained = 0;
+			int lost = 0;
+			for (CrownNotificationChange change : changes)
+			{
+				if (change.gained)
+				{
+					gained++;
+				}
+				else
+				{
+					lost++;
+				}
+			}
+			messages.add(aggregateCrownNotificationMessage(gained, lost));
+			return messages;
+		}
+
+		for (CrownNotificationChange change : changes)
+		{
+			messages.add(change.message);
+		}
+		return messages;
+	}
+
+	static String aggregateCrownNotificationMessage(int gained, int lost)
+	{
+		return "You gained " + gained + " " + crownWord(gained) + " and lost " + lost + " " + crownWord(lost) + ".";
+	}
+
+	static boolean shouldSuppressHolderNotifications(String previousLocalName, String localName,
+		List<String> previousRoster, List<String> roster)
+	{
+		boolean rosterChanged = previousRoster != null && !sameRoster(previousRoster, roster);
+		boolean localAccountChanged = !samePlayer(previousLocalName, localName);
+		return rosterChanged || localAccountChanged;
 	}
 
 	private static boolean sameRoster(List<String> a, List<String> b)
@@ -437,9 +649,55 @@ public class RivalryPlugin extends Plugin
 		return true;
 	}
 
+	private static boolean samePlayer(String a, String b)
+	{
+		if (a == null || b == null)
+		{
+			return a == b;
+		}
+		return a.equalsIgnoreCase(b);
+	}
+
 	private static boolean sameHolder(String a, String b)
 	{
-		return (a == null ? "" : a).equalsIgnoreCase(b == null ? "" : b);
+		return holderSet(a).equals(holderSet(b));
+	}
+
+	private static boolean holderContains(String holders, String player)
+	{
+		return holderSet(holders).contains(player.toLowerCase());
+	}
+
+	private static Set<String> holderSet(String holders)
+	{
+		Set<String> result = new HashSet<>();
+		if (holders == null || holders.isBlank())
+		{
+			return result;
+		}
+		for (String holder : holders.split("\\|"))
+		{
+			if (!holder.isBlank())
+			{
+				result.add(holder.toLowerCase());
+			}
+		}
+		return result;
+	}
+
+	private static String holderDisplayName(String holders)
+	{
+		return holders.replace("|", ", ");
+	}
+
+	private static String tierName(CrownTier tier)
+	{
+		return tier.name().toLowerCase();
+	}
+
+	private static String crownWord(int count)
+	{
+		return count == 1 ? "crown" : "crowns";
 	}
 
 	private void notify(String message, String soundResource)
@@ -498,5 +756,44 @@ public class RivalryPlugin extends Plugin
 				log.debug("Unable to play notification sound {}", resourcePath, e);
 			}
 		});
+	}
+
+	private static final class LocalStatValues
+	{
+		private final Map<HiscoreSkill, Long> skillXp;
+		private final Map<HiscoreSkill, Integer> skillLevels;
+		private final long overallXp;
+		private final int totalLevel;
+
+		private LocalStatValues(Map<HiscoreSkill, Long> skillXp, Map<HiscoreSkill, Integer> skillLevels,
+			long overallXp, int totalLevel)
+		{
+			this.skillXp = skillXp;
+			this.skillLevels = skillLevels;
+			this.overallXp = overallXp;
+			this.totalLevel = totalLevel;
+		}
+	}
+
+	static final class CrownNotificationChange
+	{
+		final String message;
+		final boolean gained;
+
+		private CrownNotificationChange(String message, boolean gained)
+		{
+			this.message = message;
+			this.gained = gained;
+		}
+
+		private static CrownNotificationChange gained(String message)
+		{
+			return new CrownNotificationChange(message, true);
+		}
+
+		private static CrownNotificationChange lost(String message)
+		{
+			return new CrownNotificationChange(message, false);
+		}
 	}
 }
