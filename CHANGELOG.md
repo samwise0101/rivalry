@@ -12,6 +12,7 @@ All notable changes to Rivalry will be documented in this file.
 - Added gold, silver, and bronze crown counts beside each player in the leaderboard.
 - Added a Total XP crown to the Skills panel.
 - Added tier-specific crown gain/loss notifications, such as "You gained the silver crown for Cooking!".
+- Added aggregate crown notifications when more than three crowns change at once.
 - Added immediate local skill and Total Level crown detection from RuneLite stat changes, without waiting for the next hiscore poll.
 - Added richer category tooltips that show both crown-holder and next-player gaps with player names and crown tiers.
 
@@ -27,6 +28,7 @@ All notable changes to Rivalry will be documented in this file.
 
 - Fixed zero-value ties incorrectly awarding crowns.
 - Fixed stale hiscore refreshes overwriting local skill progress before logout.
+- Fixed crown notification spam when switching between multiple accounts.
 - Fixed pronoun-specific tooltip copy when viewing another player's category breakdown.
 
 ## 1.0
